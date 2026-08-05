@@ -4,12 +4,12 @@ use crate::config::{Network, ServiceMode, Stack};
 
 // Image repositories and the default tag used when a service section has no
 // `version`. TODO(hackathon): pin real default tags before demo day.
-const REPO_BITCOIND: (&str, &str) = ("bitcoin/bitcoin", "27.1");
-const REPO_STACKS_NODE: (&str, &str) = ("blockstack/stacks-core", "latest");
-const REPO_STACKS_SIGNER: (&str, &str) = ("blockstack/stacks-signer", "latest");
+const REPO_BITCOIND: (&str, &str) = ("bitcoin/bitcoin", "latest");
+const REPO_STACKS_NODE: (&str, &str) = ("ghcr.io/stacks-network/stacks-core", "latest");
+const REPO_STACKS_SIGNER: (&str, &str) = ("ghcr.io/stacks-network/stacks-signer", "latest");
 const REPO_STACKS_API: (&str, &str) = ("hirosystems/stacks-blockchain-api", "latest");
-const REPO_STACKS_MESH_API: (&str, &str) = ("hirosystems/stacks-mesh-api", "latest"); // TODO: real image
-const REPO_POSTGRES: (&str, &str) = ("postgres", "17");
+const REPO_STACKS_MESH_API: (&str, &str) = ("stx-labs/stacks-mesh-api", "latest"); // TODO: real image
+const REPO_POSTGRES: (&str, &str) = ("postgres", "latest");
 
 fn image((repo, default_tag): (&str, &str), version: Option<&str>) -> String {
     format!("{repo}:{}", version.unwrap_or(default_tag))

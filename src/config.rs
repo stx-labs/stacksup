@@ -135,13 +135,6 @@ pub struct StacksMeshApi {
     pub version: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
-    /// Postgres database name (must differ from the blockchain API's)
-    #[serde(default = "default_mesh_db")]
-    pub database: String,
-}
-
-fn default_mesh_db() -> String {
-    "stacks_mesh_api".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -189,31 +182,20 @@ impl Stack {
             errors.push("[postgres] mode = \"external\" requires `host`".into());
         }
 
+        // Both APIs need a node; only the blockchain API needs Postgres.
         for (name, mode) in [
             ("stacks-api", self.stacks_api.mode),
             ("stacks-mesh-api", self.stacks_mesh_api.mode),
         ] {
-            if mode == ServiceMode::Managed {
-                if self.stacks_node.mode == ServiceMode::Off {
-                    errors.push(format!(
-                        "[{name}] requires a stacks-node event stream; set [stacks-node] mode = \"managed\" or \"external\""
-                    ));
-                }
-                if self.postgres.mode == ServiceMode::Off {
-                    errors.push(format!(
-                        "[{name}] requires Postgres; set [postgres] mode = \"managed\" or \"external\""
-                    ));
-                }
+            if mode == ServiceMode::Managed && self.stacks_node.mode == ServiceMode::Off {
+                errors.push(format!(
+                    "[{name}] requires a stacks-node; set [stacks-node] mode = \"managed\" or \"external\""
+                ));
             }
         }
-
-        if self.stacks_api.mode == ServiceMode::Managed
-            && self.stacks_mesh_api.mode == ServiceMode::Managed
-            && self.stacks_api.database == self.stacks_mesh_api.database
-        {
+        if self.stacks_api.mode == ServiceMode::Managed && self.postgres.mode == ServiceMode::Off {
             errors.push(
-                "stacks-api and stacks-mesh-api must use distinct Postgres databases \
-                 (each API owns its schema and runs migrations at boot)"
+                "[stacks-api] requires Postgres; set [postgres] mode = \"managed\" or \"external\""
                     .into(),
             );
         }

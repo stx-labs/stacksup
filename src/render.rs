@@ -18,6 +18,9 @@ use crate::services::*;
 
 pub const COMPOSE_PROJECT: &str = "stacks";
 
+/// The docker network every service in the stack joins.
+const COMPOSE_NETWORK: &str = "stacks";
+
 /// Path of the compose file within a data dir.
 pub fn compose_file(data_dir: &Path) -> PathBuf {
     data_dir.join("rendered/docker-compose.yml")
@@ -29,11 +32,13 @@ const GENERATED_HEADER: &str =
 #[derive(Serialize)]
 struct ComposeFile {
     services: BTreeMap<String, ComposeService>,
+    networks: BTreeMap<String, Option<()>>,
 }
 
 #[derive(Serialize, Default)]
 struct ComposeService {
     image: String,
+    container_name: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     command: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -47,15 +52,25 @@ struct ComposeService {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     depends_on: Vec<String>,
     restart: String,
+    networks: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     extra_hosts: Vec<String>,
 }
 
 impl ComposeService {
-    fn new(image: &str) -> Self {
+    fn new(name: &str, image: &str) -> Self {
+        // Namespace generic names (postgres, bitcoind) under the project
+        // prefix; stacks-* names are already unambiguous.
+        let container_name = if name.starts_with("stacks-") {
+            name.to_string()
+        } else {
+            format!("{COMPOSE_PROJECT}-{name}")
+        };
         ComposeService {
             image: image.into(),
+            container_name,
             restart: "unless-stopped".into(),
+            networks: vec![COMPOSE_NETWORK.into()],
             // Lets managed services reach "external" services running on the
             // operator's localhost — a common setup that trips people up.
             extra_hosts: vec!["host.docker.internal:host-gateway".into()],
@@ -68,7 +83,10 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
     let dir = data_dir.join("rendered");
     std::fs::create_dir_all(&dir)?;
 
-    let mut compose = ComposeFile { services: BTreeMap::new() };
+    let mut compose = ComposeFile {
+        services: BTreeMap::new(),
+        networks: BTreeMap::from([(COMPOSE_NETWORK.to_string(), None)]),
+    };
 
     // Pre-create bind-mount sources so docker doesn't create them root-owned.
     let chainstate_subdir = |name: &str| -> Result<()> {
@@ -135,7 +153,7 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
 fn bitcoind_service(stack: &Stack) -> ComposeService {
     let rpc = bitcoind_rpc_port(stack.network);
     let p2p = bitcoind_p2p_port(stack.network);
-    let mut svc = ComposeService::new(&bitcoind_image(stack));
+    let mut svc = ComposeService::new("bitcoind", &bitcoind_image(stack));
     svc.command = vec![
         "-server=1".into(),
         "-txindex=0".into(),
@@ -152,7 +170,7 @@ fn bitcoind_service(stack: &Stack) -> ComposeService {
 }
 
 fn node_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new(&stacks_node_image(stack));
+    let mut svc = ComposeService::new("stacks-node", &stacks_node_image(stack));
     svc.command = vec!["stacks-node".into(), "start".into(), "--config".into(), "/etc/stacks/Config.toml".into()];
     svc.ports = vec![
         format!("{NODE_RPC_PORT}:{NODE_RPC_PORT}"),
@@ -174,7 +192,7 @@ fn node_service(stack: &Stack) -> ComposeService {
 }
 
 fn signer_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new(&stacks_signer_image(stack));
+    let mut svc = ComposeService::new("stacks-signer", &stacks_signer_image(stack));
     svc.command = vec!["stacks-signer".into(), "run".into(), "-c".into(), "/etc/stacks/signer.toml".into()];
     svc.volumes = vec![
         "./stacks-signer/signer.toml:/etc/stacks/signer.toml:ro".into(),
@@ -187,7 +205,7 @@ fn signer_service(stack: &Stack) -> ComposeService {
 }
 
 fn api_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new(&stacks_api_image(stack));
+    let mut svc = ComposeService::new("stacks-api", &stacks_api_image(stack));
     svc.ports = vec![format!("{API_PORT}:{API_PORT}")];
     svc.env_file = vec!["./stacks-api/.env".into()];
     if stack.postgres.mode == ServiceMode::Managed {
@@ -197,33 +215,20 @@ fn api_service(stack: &Stack) -> ComposeService {
 }
 
 fn mesh_api_service(stack: &Stack) -> ComposeService {
-    // TODO(hackathon): confirm the mesh API's real config surface (env vars,
-    // whether it consumes node events or reads the blockchain API's DB).
-    let mut svc = ComposeService::new(&stacks_mesh_api_image(stack));
+    // TODO(hackathon): confirm the mesh API's real config surface (env var
+    // names, whether it also consumes node events).
+    let mut svc = ComposeService::new("stacks-mesh-api", &stacks_mesh_api_image(stack));
     svc.ports = vec![format!("{MESH_API_PORT}:{MESH_API_PORT}")];
     let node_host = node_rpc_host(stack).unwrap_or_default();
     svc.environment.insert("STACKS_NODE_RPC_URL".into(), format!("http://{node_host}:{}", node_rpc_port(stack)));
-    if let Some(pg) = postgres_host(stack) {
-        svc.environment.insert(
-            "DATABASE_URL".into(),
-            format!(
-                "postgres://{}:{}@{}:{}/{}",
-                stack.postgres.user.as_deref().unwrap_or("postgres"),
-                stack.postgres.password.as_deref().unwrap_or("postgres"),
-                pg,
-                postgres_port(stack),
-                stack.stacks_mesh_api.database
-            ),
-        );
-    }
-    if stack.postgres.mode == ServiceMode::Managed {
-        svc.depends_on.push("postgres".into());
+    if stack.stacks_node.mode == ServiceMode::Managed {
+        svc.depends_on.push("stacks-node".into());
     }
     svc
 }
 
 fn postgres_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new(&postgres_image(stack));
+    let mut svc = ComposeService::new("postgres", &postgres_image(stack));
     svc.ports = vec![format!("{POSTGRES_PORT}:{POSTGRES_PORT}")];
     // TODO(hackathon): generate a password into a .env secret file instead
     svc.environment.insert("POSTGRES_USER".into(), stack.postgres.user.clone().unwrap_or_else(|| "postgres".into()));

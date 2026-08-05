@@ -3,3 +3,4 @@
 /chainstate
 *.env
 !sample.env
+stacks.toml
