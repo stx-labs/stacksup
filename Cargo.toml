@@ -1,0 +1,26 @@
+[package]
+name = "stacks-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+description = "One command to run a Stacks stack: bitcoind, stacks-node, signer, APIs, Postgres"
+repository = "https://github.com/stacks-network/stacks-tool"
+
+# The crate is `stacks-cli` (the bare `stacks` name is squatted on crates.io),
+# but the installed binary is `stacks`.
+[[bin]]
+name = "stacks"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+ureq = { version = "2", features = ["json"] }
+
+[profile.release]
+lto = true
+strip = true

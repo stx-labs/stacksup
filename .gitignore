@@ -1,0 +1,5 @@
+/target
+/rendered
+/chainstate
+*.env
+!sample.env

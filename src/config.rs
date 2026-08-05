@@ -1,0 +1,338 @@
+//! The `stacks.toml` schema and its validation rules.
+//!
+//! Every service uses the same tri-state:
+//!   - `managed`:  rendered into the compose file, lifecycle owned by this tool
+//!   - `external`: not run by us, but wired into every managed service's config,
+//!     health-checked by `doctor`/`status`, and never touched by `down`
+//!   - `off`:      absent; anything that requires it fails validation
+
+use std::fmt;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    Mainnet,
+    Testnet,
+    Mocknet,
+}
+
+impl fmt::Display for Network {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Network::Mainnet => write!(f, "mainnet"),
+            Network::Testnet => write!(f, "testnet"),
+            Network::Mocknet => write!(f, "mocknet"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceMode {
+    Managed,
+    External,
+    #[default]
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeRole {
+    #[default]
+    Follower,
+    /// Follower with `stacker = true`, required when running a signer
+    SignerHost,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stack {
+    pub network: Network,
+    #[serde(default)]
+    pub bitcoind: Bitcoind,
+    #[serde(default, rename = "stacks-node")]
+    pub stacks_node: StacksNode,
+    #[serde(default, rename = "stacks-signer")]
+    pub stacks_signer: StacksSigner,
+    #[serde(default, rename = "stacks-api")]
+    pub stacks_api: StacksApi,
+    #[serde(default, rename = "stacks-mesh-api")]
+    pub stacks_mesh_api: StacksMeshApi,
+    #[serde(default)]
+    pub postgres: Postgres,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Bitcoind {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image tag for the managed container (defaults to a pinned tag)
+    pub version: Option<String>,
+    /// Required when mode = "external"
+    pub host: Option<String>,
+    pub rpc_port: Option<u16>,
+    pub p2p_port: Option<u16>,
+    pub rpc_user: Option<String>,
+    pub rpc_password: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StacksNode {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image tag for the managed container (defaults to a pinned tag)
+    pub version: Option<String>,
+    #[serde(default)]
+    pub role: NodeRole,
+    /// Required when mode = "external"
+    pub rpc_host: Option<String>,
+    pub rpc_port: Option<u16>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StacksSigner {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image tag for the managed container (defaults to a pinned tag)
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StacksApi {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image tag for the managed container (defaults to a pinned tag)
+    pub version: Option<String>,
+    /// Required when mode = "external": where the API serves HTTP
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    /// Where the API's event server listens, reachable *from the node*
+    pub event_host: Option<String>,
+    pub event_port: Option<u16>,
+    /// Postgres database name (must differ from the mesh API's)
+    #[serde(default = "default_api_db")]
+    pub database: String,
+}
+
+fn default_api_db() -> String {
+    "stacks_blockchain_api".into()
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StacksMeshApi {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image tag for the managed container (defaults to a pinned tag)
+    pub version: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    /// Postgres database name (must differ from the blockchain API's)
+    #[serde(default = "default_mesh_db")]
+    pub database: String,
+}
+
+fn default_mesh_db() -> String {
+    "stacks_mesh_api".into()
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Postgres {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image tag for the managed container (defaults to a pinned tag)
+    pub version: Option<String>,
+    /// Required when mode = "external"
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub user: Option<String>,
+    pub password: Option<String>,
+}
+
+impl Stack {
+    /// Cross-service validation: the rules that make invalid stacks fail at
+    /// `up` time instead of becoming runtime mysteries.
+    pub fn validate(&self) -> (Vec<String>, Vec<String>) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mocknet = self.network == Network::Mocknet;
+
+        if mocknet && self.bitcoind.mode != ServiceMode::Off {
+            errors.push("mocknet simulates the burnchain; set [bitcoind] mode = \"off\"".into());
+        }
+        if !mocknet
+            && self.stacks_node.mode == ServiceMode::Managed
+            && self.bitcoind.mode == ServiceMode::Off
+        {
+            errors.push(format!(
+                "a {} stacks-node requires bitcoind; set [bitcoind] mode = \"managed\" or \"external\"",
+                self.network
+            ));
+        }
+
+        if self.bitcoind.mode == ServiceMode::External && self.bitcoind.host.is_none() {
+            errors.push("[bitcoind] mode = \"external\" requires `host`".into());
+        }
+        if self.stacks_node.mode == ServiceMode::External && self.stacks_node.rpc_host.is_none() {
+            errors.push("[stacks-node] mode = \"external\" requires `rpc_host`".into());
+        }
+        if self.postgres.mode == ServiceMode::External && self.postgres.host.is_none() {
+            errors.push("[postgres] mode = \"external\" requires `host`".into());
+        }
+
+        for (name, mode) in [
+            ("stacks-api", self.stacks_api.mode),
+            ("stacks-mesh-api", self.stacks_mesh_api.mode),
+        ] {
+            if mode == ServiceMode::Managed {
+                if self.stacks_node.mode == ServiceMode::Off {
+                    errors.push(format!(
+                        "[{name}] requires a stacks-node event stream; set [stacks-node] mode = \"managed\" or \"external\""
+                    ));
+                }
+                if self.postgres.mode == ServiceMode::Off {
+                    errors.push(format!(
+                        "[{name}] requires Postgres; set [postgres] mode = \"managed\" or \"external\""
+                    ));
+                }
+            }
+        }
+
+        if self.stacks_api.mode == ServiceMode::Managed
+            && self.stacks_mesh_api.mode == ServiceMode::Managed
+            && self.stacks_api.database == self.stacks_mesh_api.database
+        {
+            errors.push(
+                "stacks-api and stacks-mesh-api must use distinct Postgres databases \
+                 (each API owns its schema and runs migrations at boot)"
+                    .into(),
+            );
+        }
+
+        if self.stacks_signer.mode == ServiceMode::Managed {
+            match self.stacks_node.mode {
+                ServiceMode::Off => errors.push(
+                    "[stacks-signer] requires a stacks-node; set [stacks-node] mode = \"managed\" or \"external\""
+                        .into(),
+                ),
+                ServiceMode::Managed if self.stacks_node.role != NodeRole::SignerHost => {
+                    errors.push(
+                        "a managed signer needs [stacks-node] role = \"signer-host\" (stacker = true)".into(),
+                    )
+                }
+                ServiceMode::External => warnings.push(
+                    "signer is managed but the node is external: apply `rendered/apply-to-your-node.toml` \
+                     to your node (stacker = true, matching auth_password, signer events_observer)"
+                        .into(),
+                ),
+                _ => {}
+            }
+        }
+
+        // Reversed (push) edges: the node's config must name its observers. When
+        // the node is external we can't write that config, only emit it.
+        if self.stacks_node.mode == ServiceMode::External
+            && self.stacks_api.mode == ServiceMode::Managed
+        {
+            warnings.push(
+                "stacks-api is managed but the node is external: add the [[events_observer]] block \
+                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacks doctor`"
+                    .into(),
+            );
+        }
+
+        (errors, warnings)
+    }
+}
+
+pub fn load(path: &Path) -> Result<Stack> {
+    // `--config` accepts either the file itself or a directory containing one.
+    let path = if path.is_dir() { path.join("stacks.toml") } else { path.to_path_buf() };
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("could not read {} (run `stacks init` to create one)", path.display()))?;
+    let stack: Stack =
+        toml::from_str(&raw).with_context(|| format!("invalid config in {}", path.display()))?;
+
+    let (errors, warnings) = stack.validate();
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("error: {e}");
+        }
+        bail!("{} found {} config error(s)", path.display(), errors.len());
+    }
+    Ok(stack)
+}
+
+pub fn init(force: bool) -> Result<()> {
+    let path = Path::new("stacks.toml");
+    if path.exists() && !force {
+        bail!("stacks.toml already exists (use --force to overwrite)");
+    }
+    std::fs::write(path, DEFAULT_STACK_TOML)?;
+    println!("Wrote stacks.toml — edit it, then run `stacks up`.");
+    Ok(())
+}
+
+const DEFAULT_STACK_TOML: &str = r#"# stacks stack config — the single source of truth.
+# Everything under rendered/ is generated from this file; edit here, not there.
+#
+# Every service has a `mode`:
+#   "managed"  — run and managed by this tool (docker compose)
+#   "external" — you run it elsewhere; we wire configs to it and health-check it
+#   "off"      — not part of this stack
+#
+# Managed services also take a `version` — the docker image tag to run.
+# Omit it to use this tool's pinned default.
+
+network = "testnet" # mainnet | testnet | mocknet
+
+[bitcoind]
+mode = "managed"
+# version = "27.1"
+# For mode = "external":
+# host = "10.0.1.5"
+# rpc_port = 18332
+# p2p_port = 18333
+# rpc_user = "stacks"
+# rpc_password = "..."
+
+[stacks-node]
+mode = "managed"
+role = "follower" # follower | signer-host (required when running a signer)
+# version = "3.2.0.0.1"
+# For mode = "external":
+# rpc_host = "10.0.1.6"
+# rpc_port = 20443
+
+[stacks-signer]
+mode = "off"
+# version = "3.2.0.0.1.0"
+
+[stacks-api]
+mode = "managed"
+# version = "8.1.0"
+
+[stacks-mesh-api]
+mode = "off"
+
+[postgres]
+mode = "managed"
+# version = "17"
+# For mode = "external":
+# host = "pg.internal"
+# port = 5432
+# user = "stacks"
+# password = "..."
+"#;
