@@ -8,6 +8,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use colored::Colorize;
 
 use crate::config::{ServiceMode, Stack};
 use crate::services::*;
@@ -20,14 +21,14 @@ struct Report {
 
 impl Report {
     fn ok(&mut self, msg: &str) {
-        println!("  ✓ {msg}");
+        println!("  {} {msg}", "✓".green());
     }
     fn fail(&mut self, msg: &str) {
         self.failures += 1;
-        println!("  ✗ {msg}");
+        println!("{}", format!("  ✗ {msg}").red());
     }
     fn skip(&mut self, msg: &str) {
-        println!("  - {msg}");
+        println!("{}", format!("  - {msg}").dimmed());
     }
 }
 
@@ -71,7 +72,7 @@ pub fn run(stack: &Stack) -> Result<()> {
         println!();
         bail!("config check found {} problem(s)", r.failures);
     }
-    println!("\nAll checks passed.");
+    println!("\n{}", "All checks passed.".green());
     Ok(())
 }
 

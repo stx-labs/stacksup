@@ -79,6 +79,8 @@ enum ChainstateCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Show each service's chain tip (stacks + bitcoin heights) and whether they agree
+    Status,
 }
 
 fn main() -> Result<()> {
@@ -117,6 +119,10 @@ fn main() -> Result<()> {
         // when the config is broken or gone.
         Command::Chainstate { command: ChainstateCommand::Wipe { yes } } => {
             chainstate::wipe(&cli.data_dir, yes)
+        }
+        Command::Chainstate { command: ChainstateCommand::Status } => {
+            let stack = config::load(&cli.config)?;
+            chainstate::status(&stack, &cli.data_dir)
         }
     }
 }

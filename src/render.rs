@@ -258,18 +258,19 @@ fn postgres_service(stack: &Stack) -> ComposeService {
 
     // Ensure the API's schema exists on EVERY boot, not just first init —
     // /docker-entrypoint-initdb.d only runs on an empty data directory.
-    // Mirrors the stacks-blockchain-api test scaffold: start postgres, wait
-    // until it accepts connections, create the schema, then wait on postgres.
+    // The schema creator runs as a background job while postgres is exec'd
+    // as PID 1, so SIGTERM from `stacks stop` reaches postgres directly and
+    // shutdown is clean (a backgrounded postgres under bash would be
+    // SIGKILLed after the grace period instead).
     let user = stack.postgres.user.clone().unwrap_or_else(|| "postgres".into());
     let db = API_PG_DATABASE;
     svc.entrypoint = vec![
         "/bin/bash".into(),
         "-c".into(),
         format!(
-            "docker-entrypoint.sh postgres & \
-             until pg_isready -U {user}; do sleep 3; done && \
-             psql -U {user} -d {db} -c 'CREATE SCHEMA IF NOT EXISTS {API_PG_SCHEMA};' || true && \
-             wait"
+            "(until pg_isready -U {user} -d {db}; do sleep 3; done && \
+             psql -U {user} -d {db} -c 'CREATE SCHEMA IF NOT EXISTS {API_PG_SCHEMA};' || true) & \
+             exec docker-entrypoint.sh postgres"
         ),
     ];
     svc

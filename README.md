@@ -13,6 +13,7 @@ stacks logs             # follow service logs
 stacks stop             # stop enabled services (never touches external ones)
 stacks config render    # regenerate rendered/ without starting anything
 stacks chainstate wipe  # delete all service data (asks for confirmation)
+stacks chainstate status # compare every service's chain tip (stacks + bitcoin heights)
 ```
 
 ## The model

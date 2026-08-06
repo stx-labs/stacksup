@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use colored::Colorize;
 
 use crate::config::{ServiceMode, Stack};
 use crate::render::{COMPOSE_PROJECT, compose_file};
@@ -91,7 +92,7 @@ pub fn start(stack: &Stack, data_dir: &Path) -> Result<()> {
     println!("Starting {} managed service(s) on {}...", managed.len(), stack.network);
     for (name, mode) in roster(stack) {
         if mode == ServiceMode::External {
-            println!("  {name}: external — not managed by this tool");
+            println!("{}", format!("  {name}: external — not managed by this tool").dimmed());
         }
     }
 
@@ -112,7 +113,7 @@ pub fn stop(stack: &Stack, data_dir: &Path) -> Result<()> {
     run(cmd, "docker compose down")?;
     for (name, mode) in roster(stack) {
         if mode == ServiceMode::External {
-            println!("  {name}: external — left untouched");
+            println!("{}", format!("  {name}: external — left untouched").dimmed());
         }
     }
     Ok(())

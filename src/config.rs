@@ -10,6 +10,7 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,11 +261,11 @@ pub fn load(path: &Path) -> Result<Stack> {
 
     let (errors, warnings) = stack.validate();
     for w in &warnings {
-        eprintln!("warning: {w}");
+        eprintln!("{}", format!("warning: {w}").yellow());
     }
     if !errors.is_empty() {
         for e in &errors {
-            eprintln!("error: {e}");
+            eprintln!("{}", format!("error: {e}").red());
         }
         bail!("{} found {} config error(s)", path.display(), errors.len());
     }
