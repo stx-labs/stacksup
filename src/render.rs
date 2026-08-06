@@ -109,12 +109,12 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
         Ok(())
     };
 
-    if stack.bitcoind.mode == ServiceMode::Managed {
+    if stack.bitcoind.mode == ServiceMode::Enabled {
         chainstate_subdir("bitcoind")?;
         compose.services.insert("bitcoind".into(), bitcoind_service(stack));
     }
 
-    if stack.stacks_node.mode == ServiceMode::Managed {
+    if stack.stacks_node.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-node")?;
         std::fs::create_dir_all(dir.join("stacks-node"))?;
         std::fs::write(
@@ -124,7 +124,7 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
         compose.services.insert("stacks-node".into(), node_service(stack));
     }
 
-    if stack.stacks_signer.mode == ServiceMode::Managed {
+    if stack.stacks_signer.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-signer")?;
         std::fs::create_dir_all(dir.join("stacks-signer"))?;
         std::fs::write(
@@ -134,7 +134,7 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
         compose.services.insert("stacks-signer".into(), signer_service(stack));
     }
 
-    if stack.stacks_api.mode == ServiceMode::Managed {
+    if stack.stacks_api.mode == ServiceMode::Enabled {
         std::fs::create_dir_all(dir.join("stacks-api"))?;
         std::fs::write(
             dir.join("stacks-api/.env"),
@@ -143,11 +143,11 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
         compose.services.insert("stacks-api".into(), api_service(stack));
     }
 
-    if stack.stacks_mesh_api.mode == ServiceMode::Managed {
+    if stack.stacks_mesh_api.mode == ServiceMode::Enabled {
         compose.services.insert("stacks-mesh-api".into(), mesh_api_service(stack));
     }
 
-    if stack.postgres.mode == ServiceMode::Managed {
+    if stack.postgres.mode == ServiceMode::Enabled {
         chainstate_subdir("postgres")?;
         compose.services.insert("postgres".into(), postgres_service(stack));
     }
@@ -195,12 +195,12 @@ fn node_service(stack: &Stack) -> ComposeService {
         "./stacks-node/Config.toml:/etc/stacks/Config.toml:ro".into(),
         "../chainstate/stacks-node:/stacks-blockchain".into(),
     ];
-    if stack.bitcoind.mode == ServiceMode::Managed {
+    if stack.bitcoind.mode == ServiceMode::Enabled {
         svc.depends_on.push("bitcoind".into());
     }
     // The node pushes events to the API; if the API is down at boot the node
     // retries, but starting after the API avoids stalling block processing.
-    if stack.stacks_api.mode == ServiceMode::Managed {
+    if stack.stacks_api.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-api".into());
     }
     svc
@@ -213,7 +213,7 @@ fn signer_service(stack: &Stack) -> ComposeService {
         "./stacks-signer/signer.toml:/etc/stacks/signer.toml:ro".into(),
         "../chainstate/stacks-signer:/var/lib/stacks-signer".into(),
     ];
-    if stack.stacks_node.mode == ServiceMode::Managed {
+    if stack.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
     svc
@@ -223,7 +223,7 @@ fn api_service(stack: &Stack) -> ComposeService {
     let mut svc = ComposeService::new("stacks-api", &stacks_api_image(stack));
     svc.ports = vec![format!("{API_PORT}:{API_PORT}")];
     svc.env_file = vec!["./stacks-api/.env".into()];
-    if stack.postgres.mode == ServiceMode::Managed {
+    if stack.postgres.mode == ServiceMode::Enabled {
         svc.depends_on.push("postgres".into());
     }
     svc
@@ -236,7 +236,7 @@ fn mesh_api_service(stack: &Stack) -> ComposeService {
     svc.ports = vec![format!("{MESH_API_PORT}:{MESH_API_PORT}")];
     let node_host = node_rpc_host(stack).unwrap_or_default();
     svc.environment.insert("STACKS_NODE_RPC_URL".into(), format!("http://{node_host}:{}", node_rpc_port(stack)));
-    if stack.stacks_node.mode == ServiceMode::Managed {
+    if stack.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
     svc
@@ -289,7 +289,7 @@ fn node_config_toml(stack: &Stack) -> String {
     out.push_str("working_dir = \"/stacks-blockchain\"\n");
     out.push_str(&format!("rpc_bind = \"0.0.0.0:{NODE_RPC_PORT}\"\n"));
     out.push_str(&format!("p2p_bind = \"0.0.0.0:{NODE_P2P_PORT}\"\n"));
-    if stack.stacks_signer.mode != ServiceMode::Off {
+    if stack.stacks_signer.mode != ServiceMode::Disabled {
         out.push_str("stacker = true\n");
     } else {
         out.push_str("miner = false\nstacker = false\n");
@@ -315,7 +315,7 @@ fn node_config_toml(stack: &Stack) -> String {
     }
     out.push('\n');
 
-    if stack.stacks_api.mode == ServiceMode::Managed {
+    if stack.stacks_api.mode == ServiceMode::Enabled {
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"stacks-api:{API_EVENT_PORT}\"\nevents_keys = {API_EVENTS_KEYS}\ntimeout_ms = 300_000\n\n"
         ));
@@ -327,7 +327,7 @@ fn node_config_toml(stack: &Stack) -> String {
         }
     }
 
-    if stack.stacks_signer.mode == ServiceMode::Managed {
+    if stack.stacks_signer.mode == ServiceMode::Enabled {
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"stacks-signer:{SIGNER_ENDPOINT_PORT}\"\nevents_keys = [\"stackerdb\", \"block_proposal\", \"burn_blocks\"]\n\n"
         ));
@@ -414,7 +414,7 @@ fn apply_to_your_node(stack: &Stack) -> Option<String> {
     );
     let mut needed = false;
 
-    if stack.stacks_api.mode == ServiceMode::Managed {
+    if stack.stacks_api.mode == ServiceMode::Enabled {
         // TODO(hackathon): make the advertised host configurable; the external
         // node must be able to reach the machine running this stack.
         out.push_str(&format!(
@@ -422,7 +422,7 @@ fn apply_to_your_node(stack: &Stack) -> Option<String> {
         ));
         needed = true;
     }
-    if stack.stacks_signer.mode == ServiceMode::Managed {
+    if stack.stacks_signer.mode == ServiceMode::Enabled {
         out.push_str(&format!(
             "[node]\nstacker = true\n\n\
              [connection_options]\nauth_token = \"{}\"\n\n\

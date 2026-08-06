@@ -6,11 +6,11 @@ config file.
 
 ```bash
 stacks config init      # write a stacks.toml
-stacks up               # validate, render configs, start managed services
+stacks start            # validate, render configs, start enabled services
 stacks status           # state of every service (managed and external)
 stacks doctor           # config coherence + connectivity checks
 stacks logs             # follow service logs
-stacks down             # stop managed services (never touches external ones)
+stacks stop             # stop enabled services (never touches external ones)
 stacks config render    # regenerate rendered/ without starting anything
 stacks chainstate wipe  # delete all service data (asks for confirmation)
 ```
@@ -21,9 +21,9 @@ stacks chainstate wipe  # delete all service data (asks for confirmation)
 
 | mode | meaning |
 |---|---|
-| `managed` | run by this tool via docker compose |
+| `enabled` | run by this tool via docker compose |
 | `external` | you run it elsewhere; we wire configs to it, health-check it, never touch it |
-| `off` | not part of this stack (dependents fail validation) |
+| `disabled` | not part of this stack (dependents fail validation) |
 
 Everything lives under `--data-dir` (default: the current directory):
 `rendered/` holds the compose file and generated service configs, and `chainstate/`
@@ -36,7 +36,7 @@ config, API env — is generated from `stacks.toml`. Cross-service invariants
 construction because they derive from one file. If you outgrow this tool,
 take `rendered/` and leave: it's plain compose + config files.
 
-When the node is `external` but the API or signer is `managed`, the node must
+When the node is `external` but the API or signer is `enabled`, the node must
 be configured to *push* to them; `stacks config render` emits
 `rendered/apply-to-your-node.toml` with the exact blocks to add on your side,
 and `stacks doctor` verifies the loop is closed.

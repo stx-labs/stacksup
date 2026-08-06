@@ -1,10 +1,10 @@
 //! The `stacks.toml` schema and its validation rules.
 //!
 //! Every service uses the same tri-state:
-//!   - `managed`:  rendered into the compose file, lifecycle owned by this tool
-//!   - `external`: not run by us, but wired into every managed service's config,
+//!   - `enabled`:  rendered into the compose file, lifecycle owned by this tool
+//!   - `external`: not run by us, but wired into every enabled service's config,
 //!     health-checked by `doctor`/`status`, and never touched by `down`
-//!   - `off`:      absent; anything that requires it fails validation
+//!   - `disabled`: absent; anything that requires it fails validation
 
 use std::fmt;
 use std::path::Path;
@@ -33,10 +33,10 @@ impl fmt::Display for Network {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceMode {
-    Managed,
+    Enabled,
     External,
     #[default]
-    Off,
+    Disabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -163,15 +163,15 @@ impl Stack {
         let mut warnings = Vec::new();
         let mocknet = self.network == Network::Mocknet;
 
-        if mocknet && self.bitcoind.mode != ServiceMode::Off {
-            errors.push("mocknet simulates the burnchain; set [bitcoind] mode = \"off\"".into());
+        if mocknet && self.bitcoind.mode != ServiceMode::Disabled {
+            errors.push("mocknet simulates the burnchain; set [bitcoind] mode = \"disabled\"".into());
         }
         if !mocknet
-            && self.stacks_node.mode == ServiceMode::Managed
-            && self.bitcoind.mode == ServiceMode::Off
+            && self.stacks_node.mode == ServiceMode::Enabled
+            && self.bitcoind.mode == ServiceMode::Disabled
         {
             errors.push(format!(
-                "a {} stacks-node requires bitcoind; set [bitcoind] mode = \"managed\" or \"external\"",
+                "a {} stacks-node requires bitcoind; set [bitcoind] mode = \"enabled\" or \"external\"",
                 self.network
             ));
         }
@@ -191,26 +191,26 @@ impl Stack {
             ("stacks-api", self.stacks_api.mode),
             ("stacks-mesh-api", self.stacks_mesh_api.mode),
         ] {
-            if mode == ServiceMode::Managed && self.stacks_node.mode == ServiceMode::Off {
+            if mode == ServiceMode::Enabled && self.stacks_node.mode == ServiceMode::Disabled {
                 errors.push(format!(
-                    "[{name}] requires a stacks-node; set [stacks-node] mode = \"managed\" or \"external\""
+                    "[{name}] requires a stacks-node; set [stacks-node] mode = \"enabled\" or \"external\""
                 ));
             }
         }
-        if self.stacks_api.mode == ServiceMode::Managed && self.postgres.mode == ServiceMode::Off {
+        if self.stacks_api.mode == ServiceMode::Enabled && self.postgres.mode == ServiceMode::Disabled {
             errors.push(
-                "[stacks-api] requires Postgres; set [postgres] mode = \"managed\" or \"external\""
+                "[stacks-api] requires Postgres; set [postgres] mode = \"enabled\" or \"external\""
                     .into(),
             );
         }
 
-        if self.stacks_signer.mode == ServiceMode::Managed {
+        if self.stacks_signer.mode == ServiceMode::Enabled {
             match self.stacks_node.mode {
-                ServiceMode::Off => errors.push(
-                    "[stacks-signer] requires a stacks-node; set [stacks-node] mode = \"managed\" or \"external\""
+                ServiceMode::Disabled => errors.push(
+                    "[stacks-signer] requires a stacks-node; set [stacks-node] mode = \"enabled\" or \"external\""
                         .into(),
                 ),
-                ServiceMode::Managed if self.stacks_node.role != NodeRole::SignerHost => {
+                ServiceMode::Enabled if self.stacks_node.role != NodeRole::SignerHost => {
                     errors.push(
                         "a managed signer needs [stacks-node] role = \"signer-host\" (stacker = true)".into(),
                     )
@@ -244,7 +244,7 @@ impl Stack {
         // Reversed (push) edges: the node's config must name its observers. When
         // the node is external we can't write that config, only emit it.
         if self.stacks_node.mode == ServiceMode::External
-            && self.stacks_api.mode == ServiceMode::Managed
+            && self.stacks_api.mode == ServiceMode::Enabled
         {
             warnings.push(
                 "stacks-api is managed but the node is external: add the [[events_observer]] block \
@@ -284,7 +284,7 @@ pub fn init(force: bool) -> Result<()> {
         bail!("stacks.toml already exists (use --force to overwrite)");
     }
     std::fs::write(path, DEFAULT_STACK_TOML)?;
-    println!("Wrote stacks.toml — edit it, then run `stacks up`.");
+    println!("Wrote stacks.toml — edit it, then run `stacks start`.");
     Ok(())
 }
 
@@ -292,9 +292,9 @@ const DEFAULT_STACK_TOML: &str = r#"# stacks stack config — the single source 
 # Everything under rendered/ is generated from this file; edit here, not there.
 #
 # Every service has a `mode`:
-#   "managed"  — run and managed by this tool (docker compose)
+#   "enabled"  — run and managed by this tool (docker compose)
 #   "external" — you run it elsewhere; we wire configs to it and health-check it
-#   "off"      — not part of this stack
+#   "disabled" — not part of this stack
 #
 # Managed services also take a `version` — the docker image tag to run.
 # Omit it to use this tool's pinned default.
@@ -302,7 +302,7 @@ const DEFAULT_STACK_TOML: &str = r#"# stacks stack config — the single source 
 network = "testnet" # mainnet | testnet | mocknet
 
 [bitcoind]
-mode = "managed"
+mode = "enabled"
 # version = "27.1"
 # For mode = "external":
 # host = "10.0.1.5"
@@ -312,7 +312,7 @@ mode = "managed"
 # rpc_password = "..."
 
 [stacks-node]
-mode = "managed"
+mode = "enabled"
 role = "follower" # follower | signer-host (required when running a signer)
 # version = "3.2.0.0.1"
 # For mode = "external":
@@ -321,18 +321,18 @@ role = "follower" # follower | signer-host (required when running a signer)
 # auth_token = "..." # your node's connection_options.auth_token
 
 [stacks-signer]
-mode = "off"
+mode = "disabled"
 # version = "3.2.0.0.1.0"
 
 [stacks-api]
-mode = "managed"
+mode = "enabled"
 # version = "8.1.0"
 
 [stacks-mesh-api]
-mode = "off"
+mode = "disabled"
 
 [postgres]
-mode = "managed"
+mode = "enabled"
 # version = "17"
 # For mode = "external":
 # host = "pg.internal"

@@ -17,7 +17,7 @@ pub fn wipe(data_dir: &Path, yes: bool) -> Result<()> {
     if let Some(running) = crate::docker::running_services(data_dir) {
         if !running.is_empty() {
             bail!(
-                "the stack is still running ({}) — run `stacks down` first",
+                "the stack is still running ({}) — run `stacks stop` first",
                 running.join(", ")
             );
         }

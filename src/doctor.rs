@@ -39,7 +39,7 @@ pub fn run(stack: &Stack) -> Result<()> {
     r.ok("stacks.toml is valid and cross-service invariants hold");
 
     println!("\ndocker");
-    if roster(stack).iter().any(|(_, m)| *m == ServiceMode::Managed) {
+    if roster(stack).iter().any(|(_, m)| *m == ServiceMode::Enabled) {
         match crate::docker::daemon_version() {
             Ok(v) => r.ok(&format!("docker daemon reachable (server {v})")),
             Err(e) => r.fail(&e.to_string()),
@@ -76,18 +76,18 @@ pub fn run(stack: &Stack) -> Result<()> {
 }
 
 /// Where to reach a service from the host: its configured host when external,
-/// localhost when managed (published ports), None when off.
+/// localhost when enabled (published ports), None when disabled.
 fn external_or_local(mode: ServiceMode, host: Option<&str>) -> Option<String> {
     match mode {
-        ServiceMode::Managed => Some("127.0.0.1".into()),
+        ServiceMode::Enabled => Some("127.0.0.1".into()),
         ServiceMode::External => host.map(str::to_owned),
-        ServiceMode::Off => None,
+        ServiceMode::Disabled => None,
     }
 }
 
 fn check_tcp(r: &mut Report, label: &str, host: Option<String>, port: u16) {
     let Some(host) = host else {
-        r.skip(&format!("{label}: off"));
+        r.skip(&format!("{label}: disabled"));
         return;
     };
     let addr = format!("{host}:{port}");
@@ -102,12 +102,12 @@ fn check_tcp(r: &mut Report, label: &str, host: Option<String>, port: u16) {
 
 fn check_node_info(r: &mut Report, stack: &Stack) {
     let host = match stack.stacks_node.mode {
-        ServiceMode::Managed => "127.0.0.1".to_string(),
+        ServiceMode::Enabled => "127.0.0.1".to_string(),
         ServiceMode::External => match &stack.stacks_node.rpc_host {
             Some(h) => h.clone(),
             None => return r.skip("stacks-node /v2/info: no rpc_host configured"),
         },
-        ServiceMode::Off => return r.skip("stacks-node /v2/info: node is off"),
+        ServiceMode::Disabled => return r.skip("stacks-node /v2/info: node is disabled"),
     };
     let url = format!("http://{host}:{}/v2/info", node_rpc_port(stack));
     match ureq::get(&url).timeout(CONNECT_TIMEOUT).call() {

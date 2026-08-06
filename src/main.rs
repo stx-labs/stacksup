@@ -38,10 +38,10 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Validate config, render service configs, and start managed services
-    Up,
-    /// Stop managed services (external services are never touched)
-    Down,
+    /// Validate config, render service configs, and start enabled services
+    Start,
+    /// Stop enabled services (external services are never touched)
+    Stop,
     /// Show the state of every service in the stack
     Status,
     /// Tail logs from managed services
@@ -92,14 +92,14 @@ fn main() -> Result<()> {
             println!("Rendered service configs to {}/", dir.display());
             Ok(())
         }
-        Command::Up => {
+        Command::Start => {
             let stack = config::load(&cli.config)?;
             render::render(&stack, &cli.data_dir)?;
-            docker::up(&stack, &cli.data_dir)
+            docker::start(&stack, &cli.data_dir)
         }
-        Command::Down => {
+        Command::Stop => {
             let stack = config::load(&cli.config)?;
-            docker::down(&stack, &cli.data_dir)
+            docker::stop(&stack, &cli.data_dir)
         }
         Command::Status => {
             let stack = config::load(&cli.config)?;

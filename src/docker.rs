@@ -79,13 +79,13 @@ fn run(mut cmd: Command, what: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn up(stack: &Stack, data_dir: &Path) -> Result<()> {
+pub fn start(stack: &Stack, data_dir: &Path) -> Result<()> {
     ensure_docker()?;
 
     let managed: Vec<_> =
-        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Managed).collect();
+        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
     if managed.is_empty() {
-        bail!("no services are set to mode = \"managed\" in stacks.toml — nothing to start");
+        bail!("no services are set to mode = \"enabled\" in stacks.toml — nothing to start");
     }
 
     println!("Starting {} managed service(s) on {}...", managed.len(), stack.network);
@@ -103,7 +103,7 @@ pub fn up(stack: &Stack, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn down(stack: &Stack, data_dir: &Path) -> Result<()> {
+pub fn stop(stack: &Stack, data_dir: &Path) -> Result<()> {
     ensure_docker()?;
     // `down` only ever touches the compose project; external services and
     // their data are outside this tool's blast radius by construction.
@@ -124,8 +124,8 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
     for (name, mode) in roster(stack) {
         match mode {
             ServiceMode::External => println!("  {name}: external"),
-            ServiceMode::Off => println!("  {name}: off"),
-            ServiceMode::Managed => {} // shown by compose ps below
+            ServiceMode::Disabled => println!("  {name}: disabled"),
+            ServiceMode::Enabled => {} // shown by compose ps below
         }
     }
     println!();

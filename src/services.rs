@@ -64,17 +64,17 @@ pub fn bitcoind_p2p_port(network: Network) -> u16 {
 /// when managed, the user-supplied host when external.
 pub fn bitcoind_host(stack: &Stack) -> Option<String> {
     match stack.bitcoind.mode {
-        ServiceMode::Managed => Some("bitcoind".into()),
+        ServiceMode::Enabled => Some("bitcoind".into()),
         ServiceMode::External => stack.bitcoind.host.clone(),
-        ServiceMode::Off => None,
+        ServiceMode::Disabled => None,
     }
 }
 
 pub fn node_rpc_host(stack: &Stack) -> Option<String> {
     match stack.stacks_node.mode {
-        ServiceMode::Managed => Some("stacks-node".into()),
+        ServiceMode::Enabled => Some("stacks-node".into()),
         ServiceMode::External => stack.stacks_node.rpc_host.clone(),
-        ServiceMode::Off => None,
+        ServiceMode::Disabled => None,
     }
 }
 
@@ -84,9 +84,9 @@ pub fn node_rpc_port(stack: &Stack) -> u16 {
 
 pub fn postgres_host(stack: &Stack) -> Option<String> {
     match stack.postgres.mode {
-        ServiceMode::Managed => Some("postgres".into()),
+        ServiceMode::Enabled => Some("postgres".into()),
         ServiceMode::External => stack.postgres.host.clone(),
-        ServiceMode::Off => None,
+        ServiceMode::Disabled => None,
     }
 }
 
