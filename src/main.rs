@@ -1,3 +1,4 @@
+mod chainstate;
 mod config;
 mod docker;
 mod doctor;
@@ -32,18 +33,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a stacks.toml in the current directory
-    Init {
-        /// Overwrite an existing stacks.toml
-        #[arg(long)]
-        force: bool,
+    /// Manage the stack's configuration (stacks.toml and rendered files)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
     /// Validate config, render service configs, and start managed services
     Up,
     /// Stop managed services (external services are never touched)
     Down,
-    /// Render all service configs (compose file, node TOML, API env) without starting anything
-    Render,
     /// Show the state of every service in the stack
     Status,
     /// Tail logs from managed services
@@ -53,14 +51,42 @@ enum Command {
     },
     /// Check config coherence and connectivity to every service
     Doctor,
+    /// Operations on the stack's on-disk state
+    Chainstate {
+        #[command(subcommand)]
+        command: ChainstateCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Create a stacks.toml in the current directory
+    Init {
+        /// Overwrite an existing stacks.toml
+        #[arg(long)]
+        force: bool,
+    },
+    /// Render all service configs (compose file, node TOML, API env) without starting anything
+    Render,
+}
+
+#[derive(Subcommand)]
+enum ChainstateCommand {
+    /// Permanently delete the chainstate directory (bitcoind, stacks-node,
+    /// signer, and Postgres data) — asks for confirmation first
+    Wipe {
+        /// Skip the confirmation prompt (for scripts)
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Init { force } => config::init(force),
-        Command::Render => {
+        Command::Config { command: ConfigCommand::Init { force } } => config::init(force),
+        Command::Config { command: ConfigCommand::Render } => {
             let stack = config::load(&cli.config)?;
             let dir = render::render(&stack, &cli.data_dir)?;
             println!("Rendered service configs to {}/", dir.display());
@@ -86,6 +112,11 @@ fn main() -> Result<()> {
         Command::Doctor => {
             let stack = config::load(&cli.config)?;
             doctor::run(&stack)
+        }
+        // Deliberately does not load stacks.toml: wiping state must work even
+        // when the config is broken or gone.
+        Command::Chainstate { command: ChainstateCommand::Wipe { yes } } => {
+            chainstate::wipe(&cli.data_dir, yes)
         }
     }
 }

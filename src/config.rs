@@ -93,6 +93,10 @@ pub struct StacksNode {
     /// Required when mode = "external"
     pub rpc_host: Option<String>,
     pub rpc_port: Option<u16>,
+    /// The node's `connection_options.auth_token`. Only configurable when
+    /// mode = "external" (it must match what your node runs with); managed
+    /// nodes always use a tool-managed token.
+    pub auth_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -211,13 +215,30 @@ impl Stack {
                         "a managed signer needs [stacks-node] role = \"signer-host\" (stacker = true)".into(),
                     )
                 }
-                ServiceMode::External => warnings.push(
-                    "signer is managed but the node is external: apply `rendered/apply-to-your-node.toml` \
-                     to your node (stacker = true, matching auth_password, signer events_observer)"
-                        .into(),
-                ),
+                ServiceMode::External => {
+                    if self.stacks_node.auth_token.is_none() {
+                        errors.push(
+                            "a managed signer with an external node needs [stacks-node] auth_token \
+                             (your node's `connection_options.auth_token`, so the signer can authenticate)"
+                                .into(),
+                        );
+                    }
+                    warnings.push(
+                        "signer is managed but the node is external: apply `rendered/apply-to-your-node.toml` \
+                         to your node (stacker = true, matching auth_password, signer events_observer)"
+                            .into(),
+                    );
+                }
                 _ => {}
             }
+        }
+
+        if self.stacks_node.mode != ServiceMode::External && self.stacks_node.auth_token.is_some() {
+            warnings.push(
+                "[stacks-node] auth_token is only used when mode = \"external\"; \
+                 a managed node uses a tool-managed token"
+                    .into(),
+            );
         }
 
         // Reversed (push) edges: the node's config must name its observers. When
@@ -240,7 +261,7 @@ pub fn load(path: &Path) -> Result<Stack> {
     // `--config` accepts either the file itself or a directory containing one.
     let path = if path.is_dir() { path.join("stacks.toml") } else { path.to_path_buf() };
     let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("could not read {} (run `stacks init` to create one)", path.display()))?;
+        .with_context(|| format!("could not read {} (run `stacks config init` to create one)", path.display()))?;
     let stack: Stack =
         toml::from_str(&raw).with_context(|| format!("invalid config in {}", path.display()))?;
 
@@ -297,6 +318,7 @@ role = "follower" # follower | signer-host (required when running a signer)
 # For mode = "external":
 # rpc_host = "10.0.1.6"
 # rpc_port = 20443
+# auth_token = "..." # your node's connection_options.auth_token
 
 [stacks-signer]
 mode = "off"

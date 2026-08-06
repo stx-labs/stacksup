@@ -5,13 +5,14 @@ the Stacks Blockchain API, the Stacks Mesh API, and Postgres — from a single
 config file.
 
 ```bash
-stacks init      # write a stacks.toml
-stacks up        # validate, render configs, start managed services
-stacks status    # state of every service (managed and external)
-stacks doctor    # config coherence + connectivity checks
-stacks logs      # follow service logs
-stacks down      # stop managed services (never touches external ones)
-stacks render    # regenerate rendered/ without starting anything
+stacks config init      # write a stacks.toml
+stacks up               # validate, render configs, start managed services
+stacks status           # state of every service (managed and external)
+stacks doctor           # config coherence + connectivity checks
+stacks logs             # follow service logs
+stacks down             # stop managed services (never touches external ones)
+stacks config render    # regenerate rendered/ without starting anything
+stacks chainstate wipe  # delete all service data (asks for confirmation)
 ```
 
 ## The model
@@ -36,15 +37,15 @@ construction because they derive from one file. If you outgrow this tool,
 take `rendered/` and leave: it's plain compose + config files.
 
 When the node is `external` but the API or signer is `managed`, the node must
-be configured to *push* to them; `stacks render` emits
+be configured to *push* to them; `stacks config render` emits
 `rendered/apply-to-your-node.toml` with the exact blocks to add on your side,
 and `stacks doctor` verifies the loop is closed.
 
 ## Development
 
 ```bash
-cargo run -- init
-cargo run -- render
+cargo run -- config init
+cargo run -- config render
 cargo build --release   # binary at target/release/stacks
 ```
 

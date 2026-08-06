@@ -17,16 +17,58 @@ fn compose(data_dir: &Path) -> Command {
     cmd
 }
 
-fn ensure_docker() -> Result<()> {
-    let ok = Command::new("docker")
-        .args(["version", "--format", "{{.Server.Version}}"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !ok {
-        bail!("docker daemon is not reachable — is Docker running?");
+/// Docker Engine server version, distinguishing "not installed" from
+/// "daemon not running" so the operator gets the right fix.
+pub fn daemon_version() -> Result<String> {
+    match Command::new("docker").args(["version", "--format", "{{.Server.Version}}"]).output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
+            "docker is not installed (or not on PATH) — see https://docs.docker.com/get-docker/"
+        ),
+        Err(e) => bail!("could not run docker: {e}"),
+        Ok(o) if !o.status.success() => bail!(
+            "docker is installed but the daemon is not reachable — is Docker running? ({})",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Ok(o) => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
     }
+}
+
+/// Compose v2 plugin version ("docker compose" is a separate install from the engine).
+pub fn compose_version() -> Result<String> {
+    match Command::new("docker").args(["compose", "version", "--short"]).output() {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+        _ => bail!(
+            "the docker compose plugin is missing — see https://docs.docker.com/compose/install/"
+        ),
+    }
+}
+
+/// Gate for every command that touches docker: CLI present, daemon up, compose installed.
+fn ensure_docker() -> Result<()> {
+    daemon_version()?;
+    compose_version()?;
     Ok(())
+}
+
+/// Names of this stack's currently running compose services. Best effort:
+/// `None` when docker or the rendered compose file is unavailable.
+pub fn running_services(data_dir: &Path) -> Option<Vec<String>> {
+    if !compose_file(data_dir).exists() {
+        return None;
+    }
+    let mut cmd = compose(data_dir);
+    cmd.args(["ps", "--services", "--status", "running"]);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_owned)
+            .filter(|s| !s.is_empty())
+            .collect(),
+    )
 }
 
 fn run(mut cmd: Command, what: &str) -> Result<()> {

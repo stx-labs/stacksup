@@ -38,6 +38,20 @@ pub fn run(stack: &Stack) -> Result<()> {
     // load() already failed hard on errors; getting here means the config is coherent.
     r.ok("stacks.toml is valid and cross-service invariants hold");
 
+    println!("\ndocker");
+    if roster(stack).iter().any(|(_, m)| *m == ServiceMode::Managed) {
+        match crate::docker::daemon_version() {
+            Ok(v) => r.ok(&format!("docker daemon reachable (server {v})")),
+            Err(e) => r.fail(&e.to_string()),
+        }
+        match crate::docker::compose_version() {
+            Ok(v) => r.ok(&format!("docker compose plugin installed ({v})")),
+            Err(e) => r.fail(&e.to_string()),
+        }
+    } else {
+        r.skip("no managed services — docker not required");
+    }
+
     println!("\nconnectivity");
     // External services are checked from the host. Managed services publish
     // their ports on localhost, so they are checkable the same way once up.
