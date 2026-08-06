@@ -49,8 +49,6 @@ enum Command {
         /// Service name (e.g. stacks-node); omit for all
         service: Option<String>,
     },
-    /// Check config coherence and connectivity to every service
-    Doctor,
     /// Operations on the stack's on-disk state
     Chainstate {
         #[command(subcommand)]
@@ -68,6 +66,8 @@ enum ConfigCommand {
     },
     /// Render all service configs (compose file, node TOML, API env) without starting anything
     Render,
+    /// Check config coherence and connectivity to every service
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
             let stack = config::load(&cli.config)?;
             docker::logs(&stack, &cli.data_dir, service.as_deref())
         }
-        Command::Doctor => {
+        Command::Config { command: ConfigCommand::Check } => {
             let stack = config::load(&cli.config)?;
             doctor::run(&stack)
         }

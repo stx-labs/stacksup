@@ -241,7 +241,7 @@ impl Stack {
         {
             warnings.push(
                 "stacks-api is managed but the node is external: add the [[events_observer]] block \
-                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacks doctor`"
+                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacks config check`"
                     .into(),
             );
         }

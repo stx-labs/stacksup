@@ -412,7 +412,7 @@ TESTNET_SBTC_FAUCET_ENABLED=false
 fn apply_to_your_node(stack: &Stack) -> Option<String> {
     let mut out = String::from(
         "# Add these blocks to your stacks-node config, then restart it.\n\
-         # Verify events are flowing afterwards with `stacks doctor`.\n\n",
+         # Verify events are flowing afterwards with `stacks config check`.\n\n",
     );
     let mut needed = false;
 

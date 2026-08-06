@@ -8,7 +8,7 @@ config file.
 stacks config init      # write a stacks.toml
 stacks start            # validate, render configs, start enabled services
 stacks status           # state of every service (managed and external)
-stacks doctor           # config coherence + connectivity checks
+stacks config check     # config coherence + connectivity checks
 stacks logs             # follow service logs
 stacks stop             # stop enabled services (never touches external ones)
 stacks config render    # regenerate rendered/ without starting anything
@@ -39,7 +39,7 @@ take `rendered/` and leave: it's plain compose + config files.
 When the node is `external` but the API or signer is `enabled`, the node must
 be configured to *push* to them; `stacks config render` emits
 `rendered/apply-to-your-node.toml` with the exact blocks to add on your side,
-and `stacks doctor` verifies the loop is closed.
+and `stacks config check` verifies the loop is closed.
 
 ## Development
 

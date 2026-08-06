@@ -1,4 +1,4 @@
-//! `stacks doctor` — answers "why isn't my stack working?".
+//! `stacks config check` — answers "why isn't my stack working?".
 //!
 //! Config coherence is already enforced at load time (config::validate); this
 //! module checks the *live* side: can every consumer actually reach its
@@ -69,7 +69,7 @@ pub fn run(stack: &Stack) -> Result<()> {
 
     if r.failures > 0 {
         println!();
-        bail!("doctor found {} problem(s)", r.failures);
+        bail!("config check found {} problem(s)", r.failures);
     }
     println!("\nAll checks passed.");
     Ok(())
