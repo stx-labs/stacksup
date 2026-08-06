@@ -38,8 +38,10 @@ const GENERATED_HEADER: &str =
 /// FT/NFT/contract events the API indexes. Invalid keys panic the node at startup.
 const API_EVENTS_KEYS: &str = r#"["*"]"#;
 
-/// The Postgres schema the blockchain API owns (its PG_SCHEMA, created by the
-/// managed Postgres init script).
+/// The Postgres database and schema the blockchain API owns. Fixed names:
+/// they only apply to the managed Postgres (an external API brings its own
+/// database, and an external Postgres pairs with an enabled API via these).
+const API_PG_DATABASE: &str = "stacks_blockchain_api";
 const API_PG_SCHEMA: &str = "stacks_blockchain_api";
 
 #[derive(Serialize)]
@@ -248,7 +250,7 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     // TODO(hackathon): generate a password into a .env secret file instead
     svc.environment.insert("POSTGRES_USER".into(), stack.postgres.user.clone().unwrap_or_else(|| "postgres".into()));
     svc.environment.insert("POSTGRES_PASSWORD".into(), stack.postgres.password.clone().unwrap_or_else(|| "postgres".into()));
-    svc.environment.insert("POSTGRES_DB".into(), stack.stacks_api.database.clone());
+    svc.environment.insert("POSTGRES_DB".into(), API_PG_DATABASE.into());
     // Postgres 18+ images keep data in a version-specific subdirectory and
     // require the mount at /var/lib/postgresql (not .../data), enabling
     // pg_upgrade across majors. Tags <= 17 need .../data instead.
@@ -259,7 +261,7 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     // Mirrors the stacks-blockchain-api test scaffold: start postgres, wait
     // until it accepts connections, create the schema, then wait on postgres.
     let user = stack.postgres.user.clone().unwrap_or_else(|| "postgres".into());
-    let db = stack.stacks_api.database.clone();
+    let db = API_PG_DATABASE;
     svc.entrypoint = vec![
         "/bin/bash".into(),
         "-c".into(),
@@ -401,7 +403,7 @@ TESTNET_SBTC_FAUCET_ENABLED=false
         pg_schema = API_PG_SCHEMA,
         pg_user = stack.postgres.user.as_deref().unwrap_or("postgres"),
         pg_password = stack.postgres.password.as_deref().unwrap_or("postgres"),
-        pg_db = stack.stacks_api.database,
+        pg_db = API_PG_DATABASE,
     )
 }
 

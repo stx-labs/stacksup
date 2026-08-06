@@ -121,13 +121,6 @@ pub struct StacksApi {
     /// Where the API's event server listens, reachable *from the node*
     pub event_host: Option<String>,
     pub event_port: Option<u16>,
-    /// Postgres database name (must differ from the mesh API's)
-    #[serde(default = "default_api_db")]
-    pub database: String,
-}
-
-fn default_api_db() -> String {
-    "stacks_blockchain_api".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
