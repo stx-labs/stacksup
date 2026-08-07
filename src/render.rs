@@ -151,6 +151,7 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
 
     if stack.postgres.mode == ServiceMode::Enabled {
         chainstate_subdir("postgres")?;
+        std::fs::create_dir_all(data_dir.join("downloads"))?;
         compose.services.insert("postgres".into(), postgres_service(stack));
     }
 
@@ -254,7 +255,13 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     // Postgres 18+ images keep data in a version-specific subdirectory and
     // require the mount at /var/lib/postgresql (not .../data), enabling
     // pg_upgrade across majors. Tags <= 17 need .../data instead.
-    svc.volumes = vec!["../chainstate/postgres:/var/lib/postgresql".into()];
+    svc.volumes = vec![
+        "../chainstate/postgres:/var/lib/postgresql".into(),
+        // Read-only view of downloaded archives so pg_restore (which needs a
+        // seekable file, not stdin) can restore dumps fetched by
+        // `stacks chainstate download`.
+        "../downloads:/downloads:ro".into(),
+    ];
 
     // Ensure the API's schema exists on EVERY boot, not just first init —
     // /docker-entrypoint-initdb.d only runs on an empty data directory.

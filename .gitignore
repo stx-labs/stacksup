@@ -1,6 +1,7 @@
 /target
 /rendered
 /chainstate
+/downloads
 *.env
 !sample.env
 stacks.toml

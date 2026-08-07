@@ -11,9 +11,11 @@ stacks status           # state of every service (managed and external)
 stacks config check     # config coherence + connectivity checks
 stacks logs             # follow service logs
 stacks stop             # stop enabled services (never touches external ones)
+stacks pull             # pull the latest images for every enabled service
 stacks config render    # regenerate rendered/ without starting anything
 stacks chainstate wipe  # delete all service data (asks for confirmation)
 stacks chainstate status # compare every service's chain tip (stacks + bitcoin heights)
+stacks chainstate download # seed chainstate from the Hiro Archive (resumable, verified)
 ```
 
 ## The model
@@ -49,6 +51,18 @@ cargo run -- config init
 cargo run -- config render
 cargo build --release   # binary at target/release/stacks
 ```
+
+## Seeding chainstate
+
+`stacks chainstate download` fetches the node chainstate tarball and/or the
+API's Postgres dump from the [Hiro Archive](https://docs.hiro.so/en/resources/archive/download-guide),
+verifies sha256, and restores them (untar for the node, `pg_restore` for the
+API). Downloads are resumable — Ctrl-C and re-run any time. Useful flags:
+`--service node|api|all`, `--archive <file|url|path>` to pin a specific
+archive, `--check-only` for a dry-run plan, `--yes` for unattended runs
+(`nohup stacks chainstate download --yes &`), `--no-verify`,
+`--skip-version-check`, `--keep-archives`. Always resolves versioned archives (never -latest pointers); the archive's version must be ≤
+the service's configured `version` in stacks.toml.
 
 ## Roadmap
 

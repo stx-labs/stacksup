@@ -72,6 +72,20 @@ pub fn running_services(data_dir: &Path) -> Option<Vec<String>> {
     )
 }
 
+/// Start a single compose service (used by restores that need only postgres).
+pub fn compose_up_service(data_dir: &Path, service: &str) -> Result<()> {
+    let mut cmd = compose(data_dir);
+    cmd.args(["up", "-d", service]);
+    run(cmd, "docker compose up")
+}
+
+/// Stop a single compose service.
+pub fn compose_stop_service(data_dir: &Path, service: &str) -> Result<()> {
+    let mut cmd = compose(data_dir);
+    cmd.args(["stop", service]);
+    run(cmd, "docker compose stop")
+}
+
 fn run(mut cmd: Command, what: &str) -> Result<()> {
     let status = cmd.status().with_context(|| format!("failed to run {what}"))?;
     if !status.success() {
@@ -101,6 +115,28 @@ pub fn start(stack: &Stack, data_dir: &Path) -> Result<()> {
     run(cmd, "docker compose up")?;
 
     println!("\nStack is starting. Follow along with `stacks status` or `stacks logs`.");
+    Ok(())
+}
+
+pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
+    ensure_docker()?;
+    let enabled: Vec<_> =
+        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
+    if enabled.is_empty() {
+        bail!("no services are set to mode = \"enabled\" in stacks.toml — nothing to pull");
+    }
+    println!("Pulling images for {} enabled service(s):", enabled.len());
+    for (name, _) in &enabled {
+        println!("  {name}");
+    }
+    println!();
+    let mut cmd = compose(data_dir);
+    cmd.arg("pull");
+    run(cmd, "docker compose pull")?;
+    println!(
+        "\n{} images up to date — restart with `stacks stop && stacks start` to run them",
+        "✓".green()
+    );
     Ok(())
 }
 
