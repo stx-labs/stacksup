@@ -59,6 +59,14 @@ enum Command {
         #[arg(long)]
         destroy: bool,
     },
+    /// Restart enabled services (re-renders config so changes take effect)
+    Restart {
+        /// Single service to restart (e.g. stacks-node); omit to restart all
+        service: Option<String>,
+        /// Restart from the existing rendered/ configs without re-rendering
+        #[arg(long)]
+        no_render: bool,
+    },
     /// Pull the latest images for every enabled service
     Pull,
     /// Check registries for newer image versions and print upgrade guidance
@@ -198,6 +206,13 @@ fn run() -> Result<()> {
         Command::Stop { service, destroy } => {
             let stack = config::load(&cli.config)?;
             docker::stop(&stack, &cli.data_dir, service.as_deref(), destroy)
+        }
+        Command::Restart { service, no_render } => {
+            let stack = config::load(&cli.config)?;
+            if !no_render {
+                render::render(&stack, &cli.data_dir)?;
+            }
+            docker::restart(&stack, &cli.data_dir, service.as_deref())
         }
         Command::Pull => {
             let stack = config::load(&cli.config)?;

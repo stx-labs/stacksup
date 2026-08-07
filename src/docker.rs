@@ -273,6 +273,41 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool
     Ok(())
 }
 
+/// Restart = stop + up. Deliberately not `docker compose restart`, which
+/// reuses the existing container: going through `up` means a re-rendered
+/// config or freshly pulled image takes effect on restart.
+pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
+    preflight(data_dir)?;
+
+    if let Some(name) = service {
+        ensure_enabled(stack, name)?;
+        println!("Restarting {name}...");
+        let mut cmd = compose(data_dir);
+        cmd.args(["stop", name]);
+        run(cmd, "docker compose stop")?;
+        let mut cmd = compose(data_dir);
+        cmd.args(["up", "-d", name]);
+        run(cmd, "docker compose up")?;
+        println!("\n{name} restarted. Follow along with `stacks logs {name}`.");
+        return Ok(());
+    }
+
+    let enabled: Vec<_> =
+        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
+    if enabled.is_empty() {
+        bail!("no services are set to mode = \"enabled\" in stacks.toml — nothing to restart");
+    }
+    println!("Restarting {} service(s)...", enabled.len());
+    let mut cmd = compose(data_dir);
+    cmd.arg("stop");
+    run(cmd, "docker compose stop")?;
+    let mut cmd = compose(data_dir);
+    cmd.args(["up", "-d", "--remove-orphans"]);
+    run(cmd, "docker compose up")?;
+    println!("\nStack restarted. Follow along with `stacks status` or `stacks logs`.");
+    Ok(())
+}
+
 pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
     ensure_docker()?;
     println!("network: {}\n", stack.network);
