@@ -3,6 +3,7 @@ mod config;
 mod docker;
 mod doctor;
 mod download;
+mod export;
 mod render;
 mod services;
 
@@ -52,6 +53,9 @@ enum Command {
     Stop {
         /// Single service to stop (e.g. stacks-node); omit to stop all
         service: Option<String>,
+        /// Also remove containers and the network (deletes container logs)
+        #[arg(long)]
+        destroy: bool,
     },
     /// Pull the latest images for every enabled service
     Pull,
@@ -61,11 +65,32 @@ enum Command {
     Logs {
         /// Service name (e.g. stacks-node); omit for all
         service: Option<String>,
+        #[command(subcommand)]
+        command: Option<LogsCommand>,
     },
     /// Operations on the stack's on-disk state
     Chainstate {
         #[command(subcommand)]
         command: ChainstateCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum LogsCommand {
+    /// Export logs (and diagnostics) into a shareable, redacted bundle
+    Export {
+        /// Single service to export (e.g. stacks-node); omit for all
+        service: Option<String>,
+        /// How far back to collect logs (docker duration, e.g. 2h, 30m)
+        #[arg(long, default_value = "24h")]
+        since: String,
+        /// Only logs — skip versions, configs, and diagnostic reports
+        #[arg(long)]
+        logs_only: bool,
+        /// Output path (default: stacks-support-<network>-<timestamp>.tar.gz,
+        /// or <service>-<timestamp>.log for single-service --logs-only)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -156,9 +181,9 @@ fn run() -> Result<()> {
             }
             docker::start(&stack, &cli.data_dir, service.as_deref())
         }
-        Command::Stop { service } => {
+        Command::Stop { service, destroy } => {
             let stack = config::load(&cli.config)?;
-            docker::stop(&stack, &cli.data_dir, service.as_deref())
+            docker::stop(&stack, &cli.data_dir, service.as_deref(), destroy)
         }
         Command::Pull => {
             let stack = config::load(&cli.config)?;
@@ -169,9 +194,21 @@ fn run() -> Result<()> {
             let stack = config::load(&cli.config)?;
             docker::status(&stack, &cli.data_dir)
         }
-        Command::Logs { service } => {
+        Command::Logs { service, command: None } => {
             let stack = config::load(&cli.config)?;
             docker::logs(&stack, &cli.data_dir, service.as_deref())
+        }
+        Command::Logs {
+            command: Some(LogsCommand::Export { service, since, logs_only, out }),
+            ..
+        } => {
+            let stack = config::load(&cli.config)?;
+            export::run(
+                &stack,
+                &cli.config,
+                &cli.data_dir,
+                export::Opts { service, since, logs_only, out },
+            )
         }
         Command::Config { command: ConfigCommand::Check } => {
             let stack = config::load(&cli.config)?;

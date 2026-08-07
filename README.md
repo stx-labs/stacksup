@@ -9,8 +9,9 @@ stacks config init      # write a stacks.toml
 stacks start [service]  # validate, render, start enabled services (--no-render to skip render)
 stacks status           # state of every service (managed and external)
 stacks config check     # config coherence + connectivity checks
-stacks logs             # follow service logs
-stacks stop [service]   # stop enabled services (never touches external ones)
+stacks logs [service]   # follow service logs
+stacks logs export      # shareable, redacted support bundle (logs + diagnostics)
+stacks stop [service]   # stop enabled services, keep containers+logs (--destroy to remove)
 stacks pull             # pull the latest images for every enabled service
 stacks config render    # regenerate rendered/ without starting anything
 stacks chainstate wipe  # delete all service data (asks for confirmation)

@@ -86,6 +86,32 @@ pub fn compose_stop_service(data_dir: &Path, service: &str) -> Result<()> {
     run(cmd, "docker compose stop")
 }
 
+/// Run a compose subcommand and capture its stdout (stderr appended on
+/// failure instead of erroring — support bundles want best-effort output).
+pub(crate) fn compose_capture(data_dir: &Path, args: &[&str]) -> Result<String> {
+    let mut cmd = compose(data_dir);
+    cmd.args(args);
+    let out = cmd.output().context("failed to run docker compose")?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        text.push_str("\n[command failed]\n");
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(text)
+}
+
+/// Docker + rendered-compose preflight shared by commands that need both.
+pub(crate) fn preflight(data_dir: &Path) -> Result<()> {
+    ensure_docker()?;
+    if !compose_file(data_dir).exists() {
+        bail!(
+            "no rendered configs at {} — run `stacks config render` first",
+            compose_file(data_dir).display()
+        );
+    }
+    Ok(())
+}
+
 fn run(mut cmd: Command, what: &str) -> Result<()> {
     let status = cmd.status().with_context(|| format!("failed to run {what}"))?;
     if !status.success() {
@@ -95,7 +121,7 @@ fn run(mut cmd: Command, what: &str) -> Result<()> {
 }
 
 /// A service name is only startable/stoppable if it's enabled in stacks.toml.
-fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
+pub(crate) fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
     match roster(stack).iter().find(|(n, _)| *n == name) {
         Some((_, ServiceMode::Enabled)) => Ok(()),
         Some((_, mode)) => bail!(
@@ -178,7 +204,7 @@ pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
+pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool) -> Result<()> {
     ensure_docker()?;
 
     if let Some(name) = service {
@@ -192,11 +218,25 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()>
         return Ok(());
     }
 
-    // `down` only ever touches the compose project; external services and
-    // their data are outside this tool's blast radius by construction.
-    let mut cmd = compose(data_dir);
-    cmd.arg("down");
-    run(cmd, "docker compose down")?;
+    if destroy {
+        // `down` removes containers (and their logs) and the network. It only
+        // ever touches the compose project; external services and their data
+        // are outside this tool's blast radius by construction.
+        let mut cmd = compose(data_dir);
+        cmd.arg("down");
+        run(cmd, "docker compose down")?;
+    } else {
+        // Halt containers but keep them (and their logs) so issues can still
+        // be inspected/exported after stopping. `--destroy` for full cleanup.
+        let mut cmd = compose(data_dir);
+        cmd.arg("stop");
+        run(cmd, "docker compose stop")?;
+        println!(
+            "{}",
+            "Containers kept (logs still available via `stacks logs`); use `stacks stop --destroy` to remove them."
+                .dimmed()
+        );
+    }
     for (name, mode) in roster(stack) {
         if mode == ServiceMode::External {
             println!("{}", format!("  {name}: external — left untouched").dimmed());
