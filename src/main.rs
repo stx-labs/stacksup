@@ -118,9 +118,11 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum ChainstateCommand {
-    /// Permanently delete the chainstate directory (bitcoind, stacks-node,
-    /// signer, and Postgres data) — asks for confirmation first
+    /// Permanently delete on-disk chainstate — asks for confirmation first
     Wipe {
+        /// Single service's state to wipe (bitcoind, stacks-node,
+        /// stacks-signer, postgres); omit to wipe everything
+        service: Option<String>,
         /// Skip the confirmation prompt (for scripts)
         #[arg(long)]
         yes: bool,
@@ -228,8 +230,8 @@ fn run() -> Result<()> {
         }
         // Deliberately does not load stacks.toml: wiping state must work even
         // when the config is broken or gone.
-        Command::Chainstate { command: ChainstateCommand::Wipe { yes } } => {
-            chainstate::wipe(&cli.data_dir, yes)
+        Command::Chainstate { command: ChainstateCommand::Wipe { service, yes } } => {
+            chainstate::wipe(&cli.data_dir, service.as_deref(), yes)
         }
         Command::Chainstate { command: ChainstateCommand::Status } => {
             let stack = config::load(&cli.config)?;

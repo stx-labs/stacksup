@@ -178,7 +178,7 @@ fn guidance(row: &Row) -> Option<String> {
                     &format!(
                         "  stacks-api {mj}: MAJOR — DB-BREAKING. The new API cannot migrate the old database:\n\
                              1. `stacks stop`\n\
-                             2. delete <data-dir>/chainstate/postgres (API data only)\n\
+                             2. `stacks chainstate wipe postgres` (API data only)\n\
                              3. set [stacks-api] version = \"{mj}\" and `stacks pull`\n\
                              4. `stacks chainstate download --service api` (archive matching the new major)\n\
                              5. `stacks start`",

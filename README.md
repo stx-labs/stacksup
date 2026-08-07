@@ -15,7 +15,7 @@ stacks stop [service]   # stop enabled services, keep containers+logs (--destroy
 stacks pull             # pull the latest images for every enabled service
 stacks upgrade          # check registries for newer image versions (suggestions only)
 stacks config render    # regenerate rendered/ without starting anything
-stacks chainstate wipe  # delete all service data (asks for confirmation)
+stacks chainstate wipe [service] # delete on-disk state, all or one service (asks first)
 stacks chainstate status # compare every service's chain tip (stacks + bitcoin heights)
 stacks chainstate download # seed chainstate from the Hiro Archive (resumable, verified)
 ```

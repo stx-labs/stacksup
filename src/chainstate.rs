@@ -241,8 +241,33 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
     tip
 }
 
-pub fn wipe(data_dir: &Path, yes: bool) -> Result<()> {
-    let dir = data_dir.join("chainstate");
+/// Services that keep on-disk state under chainstate/, with the running
+/// services that would be corrupted by wiping it out from under them
+/// (stacks-api writes into postgres's data).
+const CHAINSTATE_SERVICES: &[(&str, &[&str])] = &[
+    ("bitcoind", &["bitcoind"]),
+    ("stacks-node", &["stacks-node"]),
+    ("stacks-signer", &["stacks-signer"]),
+    ("postgres", &["postgres", "stacks-api"]),
+];
+
+pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
+    let affected: &[&str] = match service {
+        Some(name) => {
+            match CHAINSTATE_SERVICES.iter().find(|(n, _)| *n == name) {
+                Some((_, users)) => users,
+                None => bail!(
+                    "`{name}` has no on-disk chainstate — services with state: {}",
+                    CHAINSTATE_SERVICES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+                ),
+            }
+        }
+        None => &[],
+    };
+    let dir = match service {
+        Some(name) => data_dir.join("chainstate").join(name),
+        None => data_dir.join("chainstate"),
+    };
     if !dir.exists() {
         println!("Nothing to wipe: {} does not exist.", dir.display());
         return Ok(());
@@ -250,10 +275,14 @@ pub fn wipe(data_dir: &Path, yes: bool) -> Result<()> {
 
     // Wiping state under running containers corrupts them; refuse first.
     if let Some(running) = crate::docker::running_services(data_dir) {
-        if !running.is_empty() {
+        let blocking: Vec<&String> = running
+            .iter()
+            .filter(|r| service.is_none() || affected.contains(&r.as_str()))
+            .collect();
+        if !blocking.is_empty() {
             bail!(
-                "the stack is still running ({}) — run `stacks stop` first",
-                running.join(", ")
+                "still running ({}) — stop them first with `stacks stop [service]`",
+                blocking.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
             );
         }
     }
