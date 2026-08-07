@@ -17,6 +17,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Network, ServiceMode, Stack};
+use crate::versions::*;
 
 const ARCHIVE_BASE: &str = "https://archive.hiro.so";
 
@@ -526,29 +527,6 @@ fn classify_version(
     }
 }
 
-/// Concrete version of a locally pulled image, from its OCI version label
-/// (`org.opencontainers.image.version` — present on stacks-core and
-/// stacks-blockchain-api images). Local inspect only; never pulls.
-fn pulled_image_version(image: &str) -> Option<Vec<u64>> {
-    let out = Command::new("docker")
-        .args([
-            "image",
-            "inspect",
-            "--format",
-            r#"{{index .Config.Labels "org.opencontainers.image.version"}}"#,
-            image,
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let label = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .trim_start_matches('v')
-        .to_string();
-    parse_version(&label)
-}
 
 /// Extract the service version from a versioned archive filename.
 /// node: `mainnet-stacks-blockchain-3.1.0.0.8-20260803.tar.gz`
@@ -571,31 +549,6 @@ fn parse_version_from_name(name: &str, _kind: Kind) -> Option<Vec<u64>> {
             }
         })
         .next()
-}
-
-fn parse_version(s: &str) -> Option<Vec<u64>> {
-    let parts: Result<Vec<u64>, _> = s.split('.').map(str::parse).collect();
-    parts.ok().filter(|v: &Vec<u64>| !v.is_empty())
-}
-
-fn compare_versions(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
-    let len = a.len().max(b.len());
-    for i in 0..len {
-        let (x, y) = (a.get(i).unwrap_or(&0), b.get(i).unwrap_or(&0));
-        match x.cmp(y) {
-            std::cmp::Ordering::Equal => continue,
-            other => return other,
-        }
-    }
-    std::cmp::Ordering::Equal
-}
-
-fn version_string(v: &[u64]) -> String {
-    v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
-}
-
-fn image_tag(image: &str) -> String {
-    image.rsplit(':').next().unwrap_or("latest").to_string()
 }
 
 // ---------------------------------------------------------------------------

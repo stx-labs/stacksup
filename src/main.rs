@@ -6,6 +6,8 @@ mod download;
 mod export;
 mod render;
 mod services;
+mod upgrade;
+mod versions;
 
 use std::path::PathBuf;
 
@@ -59,6 +61,12 @@ enum Command {
     },
     /// Pull the latest images for every enabled service
     Pull,
+    /// Check registries for newer image versions and print upgrade guidance
+    /// (suggestions only — never applies anything)
+    Upgrade {
+        /// Single service to check; omit for all enabled services
+        service: Option<String>,
+    },
     /// Show the state of every service in the stack
     Status,
     /// Tail logs from managed services
@@ -189,6 +197,10 @@ fn run() -> Result<()> {
             let stack = config::load(&cli.config)?;
             render::render(&stack, &cli.data_dir)?;
             docker::pull(&stack, &cli.data_dir)
+        }
+        Command::Upgrade { service } => {
+            let stack = config::load(&cli.config)?;
+            upgrade::run(&stack, service.as_deref())
         }
         Command::Status => {
             let stack = config::load(&cli.config)?;
