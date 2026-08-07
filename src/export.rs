@@ -44,10 +44,11 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
 
     // Containers that still exist (logs live inside them). `stacks stop`
     // keeps them; `stacks stop --destroy` removes them along with their logs.
-    let existing: Vec<String> = crate::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
-        .lines()
-        .map(str::to_owned)
-        .collect();
+    let existing: Vec<String> =
+        crate::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
+            .lines()
+            .map(str::to_owned)
+            .collect();
     if !services.iter().any(|s| existing.contains(s)) {
         bail!(
             "no containers exist for {} — logs are removed by `stacks stop --destroy`; \
@@ -64,7 +65,9 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
     if opts.logs_only && services.len() == 1 {
         let name = &services[0];
         let text = redact(&capture_logs(data_dir, name, &opts.since), &secrets);
-        let out = opts.out.unwrap_or_else(|| PathBuf::from(format!("{name}-{ts}.log")));
+        let out = opts
+            .out
+            .unwrap_or_else(|| PathBuf::from(format!("{name}-{ts}.log")));
         fs::write(&out, text)?;
         println!("Wrote {}", out.display());
         print_review_note();
@@ -84,7 +87,10 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
             "no container for this service (never started, or removed by `stacks stop --destroy`)\n"
                 .to_string()
         };
-        fs::write(tmp.join("logs").join(format!("{name}.log")), redact(&text, &secrets))?;
+        fs::write(
+            tmp.join("logs").join(format!("{name}.log")),
+            redact(&text, &secrets),
+        )?;
     }
 
     if !opts.logs_only {
@@ -99,11 +105,17 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         fs::write(tmp.join("meta.txt"), meta)?;
         fs::write(
             tmp.join("ps.txt"),
-            redact(&crate::docker::compose_capture(data_dir, &["ps", "-a"])?, &secrets),
+            redact(
+                &crate::docker::compose_capture(data_dir, &["ps", "-a"])?,
+                &secrets,
+            ),
         )?;
         fs::write(
             tmp.join("images.txt"),
-            redact(&crate::docker::compose_capture(data_dir, &["images"])?, &secrets),
+            redact(
+                &crate::docker::compose_capture(data_dir, &["images"])?,
+                &secrets,
+            ),
         )?;
 
         // Config context: stacks.toml + everything in rendered/, redacted.
@@ -111,24 +123,35 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         if let Ok(raw) = fs::read_to_string(config_path) {
             fs::write(tmp.join("config/stacks.toml"), redact(&raw, &secrets))?;
         }
-        copy_redacted_tree(&data_dir.join("rendered"), &tmp.join("config/rendered"), &secrets)?;
+        copy_redacted_tree(
+            &data_dir.join("rendered"),
+            &tmp.join("config/rendered"),
+            &secrets,
+        )?;
 
         // Best-effort reports via self-invocation: a broken stack is exactly
         // when these might fail, and a "failed: ..." file still helps.
         fs::write(
             tmp.join("chainstate-status.txt"),
-            redact(&self_report(config_path, data_dir, &["chainstate", "status"]), &secrets),
+            redact(
+                &self_report(config_path, data_dir, &["chainstate", "status"]),
+                &secrets,
+            ),
         )?;
         fs::write(
             tmp.join("config-check.txt"),
-            redact(&self_report(config_path, data_dir, &["config", "check"]), &secrets),
+            redact(
+                &self_report(config_path, data_dir, &["config", "check"]),
+                &secrets,
+            ),
         )?;
     }
 
     let out = opts
         .out
         .unwrap_or_else(|| PathBuf::from(format!("stacks-support-{network}-{ts}.tar.gz")));
-    let file = fs::File::create(&out).with_context(|| format!("cannot create {}", out.display()))?;
+    let file =
+        fs::File::create(&out).with_context(|| format!("cannot create {}", out.display()))?;
     let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
     let mut tar = tar::Builder::new(enc);
     tar.append_dir_all("stacks-support", &tmp)?;
@@ -151,7 +174,14 @@ fn print_review_note() {
 fn capture_logs(data_dir: &Path, service: &str, since: &str) -> String {
     crate::docker::compose_capture(
         data_dir,
-        &["logs", "--no-color", "--timestamps", "--since", since, service],
+        &[
+            "logs",
+            "--no-color",
+            "--timestamps",
+            "--since",
+            since,
+            service,
+        ],
     )
     .unwrap_or_else(|e| format!("failed to collect logs: {e}\n"))
 }
@@ -212,9 +242,15 @@ fn redact(text: &str, secrets: &[String]) -> String {
             let sep = line.find(['=', ':']);
             if let Some(idx) = sep {
                 let key = line[..idx].trim().to_ascii_lowercase();
-                if ["password", "auth_token", "private_key", "secret", "rpcpassword"]
-                    .iter()
-                    .any(|k| key.ends_with(k) || key.contains(&format!("{k} ")))
+                if [
+                    "password",
+                    "auth_token",
+                    "private_key",
+                    "secret",
+                    "rpcpassword",
+                ]
+                .iter()
+                .any(|k| key.ends_with(k) || key.contains(&format!("{k} ")))
                     || key.ends_with("auth_password")
                 {
                     return format!("{}{} <redacted>", &line[..idx], &line[idx..=idx]);
@@ -279,9 +315,15 @@ mod tests {
         assert!(redact("PG_PASSWORD=hunter2", &secrets).contains("PG_PASSWORD= <redacted>"));
         assert!(redact("auth_token = \"abc\"", &secrets).contains("auth_token = <redacted>"));
         assert!(redact("stacks_private_key = \"AA\"", &secrets).contains("<redacted>"));
-        assert!(redact("POSTGRES_PASSWORD: postgres", &secrets).contains("POSTGRES_PASSWORD: <redacted>"));
+        assert!(
+            redact("POSTGRES_PASSWORD: postgres", &secrets)
+                .contains("POSTGRES_PASSWORD: <redacted>")
+        );
         assert!(redact("auth_password = \"x\"", &secrets).contains("<redacted>"));
         // non-credential lines untouched
-        assert_eq!(redact("rpc_bind = \"0.0.0.0:20443\"", &secrets), "rpc_bind = \"0.0.0.0:20443\"\n");
+        assert_eq!(
+            redact("rpc_bind = \"0.0.0.0:20443\"", &secrets),
+            "rpc_bind = \"0.0.0.0:20443\"\n"
+        );
     }
 }

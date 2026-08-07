@@ -40,7 +40,10 @@ pub fn run(stack: &Stack) -> Result<()> {
     r.ok("stacks.toml is valid and cross-service invariants hold");
 
     println!("\ndocker");
-    if roster(stack).iter().any(|(_, m)| *m == ServiceMode::Enabled) {
+    if roster(stack)
+        .iter()
+        .any(|(_, m)| *m == ServiceMode::Enabled)
+    {
         match crate::docker::daemon_version() {
             Ok(v) => r.ok(&format!("docker daemon reachable (server {v})")),
             Err(e) => r.fail(&e.to_string()),
@@ -56,10 +59,36 @@ pub fn run(stack: &Stack) -> Result<()> {
     println!("\nconnectivity");
     // External services are checked from the host. Managed services publish
     // their ports on localhost, so they are checkable the same way once up.
-    check_tcp(&mut r, "bitcoind rpc", external_or_local(stack.bitcoind.mode, stack.bitcoind.host.as_deref()), stack.bitcoind.rpc_port.unwrap_or(bitcoind_rpc_port(stack.network)));
-    check_tcp(&mut r, "stacks-node rpc", external_or_local(stack.stacks_node.mode, stack.stacks_node.rpc_host.as_deref()), node_rpc_port(stack));
-    check_tcp(&mut r, "postgres", external_or_local(stack.postgres.mode, stack.postgres.host.as_deref()), postgres_port(stack));
-    check_tcp(&mut r, "stacks-api", external_or_local(stack.stacks_api.mode, stack.stacks_api.host.as_deref()), stack.stacks_api.port.unwrap_or(API_PORT));
+    check_tcp(
+        &mut r,
+        "bitcoind rpc",
+        external_or_local(stack.bitcoind.mode, stack.bitcoind.host.as_deref()),
+        stack
+            .bitcoind
+            .rpc_port
+            .unwrap_or(bitcoind_rpc_port(stack.network)),
+    );
+    check_tcp(
+        &mut r,
+        "stacks-node rpc",
+        external_or_local(
+            stack.stacks_node.mode,
+            stack.stacks_node.rpc_host.as_deref(),
+        ),
+        node_rpc_port(stack),
+    );
+    check_tcp(
+        &mut r,
+        "postgres",
+        external_or_local(stack.postgres.mode, stack.postgres.host.as_deref()),
+        postgres_port(stack),
+    );
+    check_tcp(
+        &mut r,
+        "stacks-api",
+        external_or_local(stack.stacks_api.mode, stack.stacks_api.host.as_deref()),
+        stack.stacks_api.port.unwrap_or(API_PORT),
+    );
 
     println!("\nchain");
     check_node_info(&mut r, stack);
@@ -95,7 +124,9 @@ fn check_tcp(r: &mut Report, label: &str, host: Option<String>, port: u16) {
     match addr.to_socket_addrs().ok().and_then(|mut a| a.next()) {
         Some(sock) => match TcpStream::connect_timeout(&sock, CONNECT_TIMEOUT) {
             Ok(_) => r.ok(&format!("{label}: reachable at {addr}")),
-            Err(e) => r.fail(&format!("{label}: cannot connect to {addr} ({e}) — is it running?")),
+            Err(e) => r.fail(&format!(
+                "{label}: cannot connect to {addr} ({e}) — is it running?"
+            )),
         },
         None => r.fail(&format!("{label}: cannot resolve {addr}")),
     }
@@ -116,10 +147,14 @@ fn check_node_info(r: &mut Report, stack: &Stack) {
             Ok(info) => {
                 let tip = info["stacks_tip_height"].as_u64().unwrap_or(0);
                 let burn = info["burn_block_height"].as_u64().unwrap_or(0);
-                r.ok(&format!("stacks-node /v2/info: stacks tip {tip}, burn height {burn}"));
+                r.ok(&format!(
+                    "stacks-node /v2/info: stacks tip {tip}, burn height {burn}"
+                ));
             }
             Err(e) => r.fail(&format!("stacks-node /v2/info: invalid response ({e})")),
         },
-        Err(e) => r.fail(&format!("stacks-node /v2/info: {e} — node down or still booting?")),
+        Err(e) => r.fail(&format!(
+            "stacks-node /v2/info: {e} — node down or still booting?"
+        )),
     }
 }

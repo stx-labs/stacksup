@@ -527,7 +527,6 @@ fn classify_version(
     }
 }
 
-
 /// Extract the service version from a versioned archive filename.
 /// node: `mainnet-stacks-blockchain-3.1.0.0.8-20260803.tar.gz`
 /// api:  `stacks-blockchain-api-pg-17-8.1.0-20260803.dump`

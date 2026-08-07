@@ -46,6 +46,9 @@ pub fn pulled_image_version(image: &str) -> Option<Vec<u64>> {
     if !out.status.success() {
         return None;
     }
-    let label = String::from_utf8_lossy(&out.stdout).trim().trim_start_matches('v').to_string();
+    let label = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
     parse_version(&label)
 }

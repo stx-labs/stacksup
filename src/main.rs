@@ -177,8 +177,12 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Config { command: ConfigCommand::Init { force } } => config::init(force),
-        Command::Config { command: ConfigCommand::Render } => {
+        Command::Config {
+            command: ConfigCommand::Init { force },
+        } => config::init(force),
+        Command::Config {
+            command: ConfigCommand::Render,
+        } => {
             let stack = config::load(&cli.config)?;
             let dir = render::render(&stack, &cli.data_dir)?;
             println!("Rendered service configs to {}/", dir.display());
@@ -208,12 +212,21 @@ fn run() -> Result<()> {
             let stack = config::load(&cli.config)?;
             docker::status(&stack, &cli.data_dir)
         }
-        Command::Logs { service, command: None } => {
+        Command::Logs {
+            service,
+            command: None,
+        } => {
             let stack = config::load(&cli.config)?;
             docker::logs(&stack, &cli.data_dir, service.as_deref())
         }
         Command::Logs {
-            command: Some(LogsCommand::Export { service, since, logs_only, out }),
+            command:
+                Some(LogsCommand::Export {
+                    service,
+                    since,
+                    logs_only,
+                    out,
+                }),
             ..
         } => {
             let stack = config::load(&cli.config)?;
@@ -221,19 +234,28 @@ fn run() -> Result<()> {
                 &stack,
                 &cli.config,
                 &cli.data_dir,
-                export::Opts { service, since, logs_only, out },
+                export::Opts {
+                    service,
+                    since,
+                    logs_only,
+                    out,
+                },
             )
         }
-        Command::Config { command: ConfigCommand::Check } => {
+        Command::Config {
+            command: ConfigCommand::Check,
+        } => {
             let stack = config::load(&cli.config)?;
             doctor::run(&stack)
         }
         // Deliberately does not load stacks.toml: wiping state must work even
         // when the config is broken or gone.
-        Command::Chainstate { command: ChainstateCommand::Wipe { service, yes } } => {
-            chainstate::wipe(&cli.data_dir, service.as_deref(), yes)
-        }
-        Command::Chainstate { command: ChainstateCommand::Status } => {
+        Command::Chainstate {
+            command: ChainstateCommand::Wipe { service, yes },
+        } => chainstate::wipe(&cli.data_dir, service.as_deref(), yes),
+        Command::Chainstate {
+            command: ChainstateCommand::Status,
+        } => {
             let stack = config::load(&cli.config)?;
             chainstate::status(&stack, &cli.data_dir)
         }
@@ -255,7 +277,9 @@ fn run() -> Result<()> {
                 ServiceArg::All => download::ServiceSel::All,
             };
             if archive.is_some() && matches!(service, download::ServiceSel::All) {
-                anyhow::bail!("--archive requires exactly one service: --service node or --service api");
+                anyhow::bail!(
+                    "--archive requires exactly one service: --service node or --service api"
+                );
             }
             let stack = config::load(&cli.config)?;
             download::run(

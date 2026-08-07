@@ -43,10 +43,19 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
         bail!("no enabled services hold chainstate — nothing to check");
     }
 
-    println!("{:<14} {:>14} {:>15}  source", "service", "stacks height", "bitcoin height");
+    println!(
+        "{:<14} {:>14} {:>15}  source",
+        "service", "stacks height", "bitcoin height"
+    );
     for t in &tips {
         let fmt = |v: Option<u64>| v.map_or("-".to_string(), |h| h.to_string());
-        println!("{:<14} {:>14} {:>15}  {}", t.service, fmt(t.stacks), fmt(t.bitcoin), t.source);
+        println!(
+            "{:<14} {:>14} {:>15}  {}",
+            t.service,
+            fmt(t.stacks),
+            fmt(t.bitcoin),
+            t.source
+        );
         if let Some(note) = &t.note {
             println!("{:<14} {}", "", note.yellow());
         }
@@ -54,13 +63,23 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
 
     // Verdict: what matters is the stacks height of the node vs the API,
     // and crucially WHICH ONE is ahead — the failure modes are asymmetric.
-    let node_stacks = tips.iter().find(|t| t.service == "stacks-node").and_then(|t| t.stacks);
-    let api_stacks = tips.iter().find(|t| t.service == "stacks-api").and_then(|t| t.stacks);
+    let node_stacks = tips
+        .iter()
+        .find(|t| t.service == "stacks-node")
+        .and_then(|t| t.stacks);
+    let api_stacks = tips
+        .iter()
+        .find(|t| t.service == "stacks-api")
+        .and_then(|t| t.stacks);
 
     println!();
     match (node_stacks, api_stacks) {
         (Some(node), Some(api)) if node == api => {
-            println!("{}", format!("✓ stacks-node and stacks-api agree on the stacks chain tip ({node})").green());
+            println!(
+                "{}",
+                format!("✓ stacks-node and stacks-api agree on the stacks chain tip ({node})")
+                    .green()
+            );
         }
         (Some(node), Some(api)) if node < api => {
             let warning = format!(
@@ -116,7 +135,10 @@ fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
         note: None,
     };
     if !sort_db.exists() {
-        tip.note = Some(format!("no sortition db at {} — has the node run yet?", sort_db.display()));
+        tip.note = Some(format!(
+            "no sortition db at {} — has the node run yet?",
+            sort_db.display()
+        ));
         return tip;
     }
 
@@ -168,18 +190,29 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
         note: None,
     };
     if !running {
-        tip.note = Some("bitcoind is not running — height in LevelDB is not readable offline".into());
+        tip.note =
+            Some("bitcoind is not running — height in LevelDB is not readable offline".into());
         return tip;
     }
-    let chain = if stack.network == Network::Mainnet { "main" } else { "test" };
+    let chain = if stack.network == Network::Mainnet {
+        "main"
+    } else {
+        "test"
+    };
     let out = Command::new("docker")
         .args([
             "exec",
             "stacks-bitcoind",
             "bitcoin-cli",
             &format!("-chain={chain}"),
-            &format!("-rpcuser={}", stack.bitcoind.rpc_user.as_deref().unwrap_or("stacks")),
-            &format!("-rpcpassword={}", stack.bitcoind.rpc_password.as_deref().unwrap_or("stacks")),
+            &format!(
+                "-rpcuser={}",
+                stack.bitcoind.rpc_user.as_deref().unwrap_or("stacks")
+            ),
+            &format!(
+                "-rpcpassword={}",
+                stack.bitcoind.rpc_password.as_deref().unwrap_or("stacks")
+            ),
             "getblockcount",
         ])
         .output();
@@ -187,7 +220,12 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
         Ok(o) if o.status.success() => {
             tip.bitcoin = String::from_utf8_lossy(&o.stdout).trim().parse().ok();
         }
-        Ok(o) => tip.note = Some(format!("bitcoin-cli failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Ok(o) => {
+            tip.note = Some(format!(
+                "bitcoin-cli failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ))
+        }
         Err(e) => tip.note = Some(format!("could not run bitcoin-cli: {e}")),
     }
     tip
@@ -235,7 +273,12 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
                 tip.note = Some("chain_tip is empty — the API hasn't indexed a block yet".into());
             }
         }
-        Ok(o) => tip.note = Some(format!("psql failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Ok(o) => {
+            tip.note = Some(format!(
+                "psql failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ))
+        }
         Err(e) => tip.note = Some(format!("could not run psql: {e}")),
     }
     tip
@@ -253,15 +296,17 @@ const CHAINSTATE_SERVICES: &[(&str, &[&str])] = &[
 
 pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
     let affected: &[&str] = match service {
-        Some(name) => {
-            match CHAINSTATE_SERVICES.iter().find(|(n, _)| *n == name) {
-                Some((_, users)) => users,
-                None => bail!(
-                    "`{name}` has no on-disk chainstate — services with state: {}",
-                    CHAINSTATE_SERVICES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
-                ),
-            }
-        }
+        Some(name) => match CHAINSTATE_SERVICES.iter().find(|(n, _)| *n == name) {
+            Some((_, users)) => users,
+            None => bail!(
+                "`{name}` has no on-disk chainstate — services with state: {}",
+                CHAINSTATE_SERVICES
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
         None => &[],
     };
     let dir = match service {
@@ -282,7 +327,11 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
         if !blocking.is_empty() {
             bail!(
                 "still running ({}) — stop them first with `stacks stop [service]`",
-                blocking.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                blocking
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     }
@@ -292,11 +341,22 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
 
-    println!("{}", format!("This will permanently delete {}", dir.display()).yellow());
+    println!(
+        "{}",
+        format!("This will permanently delete {}", dir.display()).yellow()
+    );
     if !contents.is_empty() {
-        println!("{}", format!("  contents: {}", contents.join(", ")).yellow());
+        println!(
+            "{}",
+            format!("  contents: {}", contents.join(", ")).yellow()
+        );
     }
-    println!("{}", "Synced chainstate can take days to rebuild. THIS CANNOT BE UNDONE.".red().bold());
+    println!(
+        "{}",
+        "Synced chainstate can take days to rebuild. THIS CANNOT BE UNDONE."
+            .red()
+            .bold()
+    );
 
     if !yes {
         print!("Type 'yes' to delete, anything else to abort: ");
@@ -309,8 +369,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
         }
     }
 
-    std::fs::remove_dir_all(&dir)
-        .with_context(|| format!("failed to delete {}", dir.display()))?;
+    std::fs::remove_dir_all(&dir).with_context(|| format!("failed to delete {}", dir.display()))?;
     println!("Deleted {}", dir.display());
     Ok(())
 }

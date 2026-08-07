@@ -31,7 +31,10 @@ pub fn stacks_api_image(stack: &Stack) -> String {
 }
 
 pub fn stacks_mesh_api_image(stack: &Stack) -> String {
-    image(REPO_STACKS_MESH_API, stack.stacks_mesh_api.version.as_deref())
+    image(
+        REPO_STACKS_MESH_API,
+        stack.stacks_mesh_api.version.as_deref(),
+    )
 }
 
 pub fn postgres_image(stack: &Stack) -> String {

@@ -14,14 +14,18 @@ use crate::services::roster;
 
 fn compose(data_dir: &Path) -> Command {
     let mut cmd = Command::new("docker");
-    cmd.args(["compose", "-p", COMPOSE_PROJECT, "-f"]).arg(compose_file(data_dir));
+    cmd.args(["compose", "-p", COMPOSE_PROJECT, "-f"])
+        .arg(compose_file(data_dir));
     cmd
 }
 
 /// Docker Engine server version, distinguishing "not installed" from
 /// "daemon not running" so the operator gets the right fix.
 pub fn daemon_version() -> Result<String> {
-    match Command::new("docker").args(["version", "--format", "{{.Server.Version}}"]).output() {
+    match Command::new("docker")
+        .args(["version", "--format", "{{.Server.Version}}"])
+        .output()
+    {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
             "docker is not installed (or not on PATH) — see https://docs.docker.com/get-docker/"
         ),
@@ -36,7 +40,10 @@ pub fn daemon_version() -> Result<String> {
 
 /// Compose v2 plugin version ("docker compose" is a separate install from the engine).
 pub fn compose_version() -> Result<String> {
-    match Command::new("docker").args(["compose", "version", "--short"]).output() {
+    match Command::new("docker")
+        .args(["compose", "version", "--short"])
+        .output()
+    {
         Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         _ => bail!(
             "the docker compose plugin is missing — see https://docs.docker.com/compose/install/"
@@ -113,7 +120,9 @@ pub(crate) fn preflight(data_dir: &Path) -> Result<()> {
 }
 
 fn run(mut cmd: Command, what: &str) -> Result<()> {
-    let status = cmd.status().with_context(|| format!("failed to run {what}"))?;
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run {what}"))?;
     if !status.success() {
         bail!("{what} exited with {status}");
     }
@@ -137,7 +146,10 @@ pub(crate) fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
                 .filter(|(_, m)| *m == ServiceMode::Enabled)
                 .map(|(n, _)| n)
                 .collect();
-            bail!("unknown service `{name}` — enabled services: {}", enabled.join(", "))
+            bail!(
+                "unknown service `{name}` — enabled services: {}",
+                enabled.join(", ")
+            )
         }
     }
 }
@@ -157,20 +169,31 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
         let mut cmd = compose(data_dir);
         cmd.args(["up", "-d", name]);
         run(cmd, "docker compose up")?;
-        println!("\n{name} is starting. Follow along with `stacks status` or `stacks logs {name}`.");
+        println!(
+            "\n{name} is starting. Follow along with `stacks status` or `stacks logs {name}`."
+        );
         return Ok(());
     }
 
-    let managed: Vec<_> =
-        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
+    let managed: Vec<_> = roster(stack)
+        .into_iter()
+        .filter(|(_, m)| *m == ServiceMode::Enabled)
+        .collect();
     if managed.is_empty() {
         bail!("no services are set to mode = \"enabled\" in stacks.toml — nothing to start");
     }
 
-    println!("Starting {} managed service(s) on {}...", managed.len(), stack.network);
+    println!(
+        "Starting {} managed service(s) on {}...",
+        managed.len(),
+        stack.network
+    );
     for (name, mode) in roster(stack) {
         if mode == ServiceMode::External {
-            println!("{}", format!("  {name}: external — not managed by this tool").dimmed());
+            println!(
+                "{}",
+                format!("  {name}: external — not managed by this tool").dimmed()
+            );
         }
     }
 
@@ -184,8 +207,10 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
 
 pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
     ensure_docker()?;
-    let enabled: Vec<_> =
-        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
+    let enabled: Vec<_> = roster(stack)
+        .into_iter()
+        .filter(|(_, m)| *m == ServiceMode::Enabled)
+        .collect();
     if enabled.is_empty() {
         bail!("no services are set to mode = \"enabled\" in stacks.toml — nothing to pull");
     }
@@ -239,7 +264,10 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool
     }
     for (name, mode) in roster(stack) {
         if mode == ServiceMode::External {
-            println!("{}", format!("  {name}: external — left untouched").dimmed());
+            println!(
+                "{}",
+                format!("  {name}: external — left untouched").dimmed()
+            );
         }
     }
     Ok(())

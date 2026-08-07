@@ -158,7 +158,8 @@ impl Stack {
         let mocknet = self.network == Network::Mocknet;
 
         if mocknet && self.bitcoind.mode != ServiceMode::Disabled {
-            errors.push("mocknet simulates the burnchain; set [bitcoind] mode = \"disabled\"".into());
+            errors
+                .push("mocknet simulates the burnchain; set [bitcoind] mode = \"disabled\"".into());
         }
         // Only a mainnet node needs its own bitcoind: krypton testnet follows
         // the Hiro-hosted bitcoin regtest, and mocknet simulates the burnchain.
@@ -201,7 +202,9 @@ impl Stack {
                 ));
             }
         }
-        if self.stacks_api.mode == ServiceMode::Enabled && self.postgres.mode == ServiceMode::Disabled {
+        if self.stacks_api.mode == ServiceMode::Enabled
+            && self.postgres.mode == ServiceMode::Disabled
+        {
             errors.push(
                 "[stacks-api] requires Postgres; set [postgres] mode = \"enabled\" or \"external\""
                     .into(),
@@ -263,9 +266,17 @@ impl Stack {
 
 pub fn load(path: &Path) -> Result<Stack> {
     // `--config` accepts either the file itself or a directory containing one.
-    let path = if path.is_dir() { path.join("stacks.toml") } else { path.to_path_buf() };
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("could not read {} (run `stacks config init` to create one)", path.display()))?;
+    let path = if path.is_dir() {
+        path.join("stacks.toml")
+    } else {
+        path.to_path_buf()
+    };
+    let raw = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "could not read {} (run `stacks config init` to create one)",
+            path.display()
+        )
+    })?;
     let stack: Stack =
         toml::from_str(&raw).with_context(|| format!("invalid config in {}", path.display()))?;
 
