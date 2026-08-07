@@ -1,4 +1,4 @@
-//! `stacks config check` — answers "why isn't my stack working?".
+//! `stacksup config check` — answers "why isn't my stack working?".
 //!
 //! Config coherence is already enforced at load time (config::validate); this
 //! module checks the *live* side: can every consumer actually reach its

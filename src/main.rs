@@ -17,7 +17,7 @@ use colored::Colorize;
 
 #[derive(Parser)]
 #[command(
-    name = "stacks",
+    name = "stacksup",
     version,
     about = "Run and manage a Stacks node stack (bitcoind, stacks-node, signer, APIs, Postgres)"
 )]

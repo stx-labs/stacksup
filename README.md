@@ -1,24 +1,24 @@
-# stacks
+# stacksup
 
 One command to run a Stacks stack — bitcoind, stacks-node, stacks-signer,
 the Stacks Blockchain API, the Stacks Mesh API, and Postgres — from a single
 config file.
 
 ```bash
-stacks config init      # write a stacks.toml
-stacks start [service]  # validate, render, start enabled services (--no-render to skip render)
-stacks status           # state of every service (managed and external)
-stacks config check     # config coherence + connectivity checks
-stacks logs [service]   # follow service logs
-stacks logs export      # shareable, redacted support bundle (logs + diagnostics)
-stacks stop [service]   # stop enabled services, keep containers+logs (--destroy to remove)
-stacks restart [service] # stop + start so config/image changes take effect
-stacks pull             # pull the latest images for every enabled service
-stacks upgrade          # check registries for newer image versions (suggestions only)
-stacks config render    # regenerate rendered/ without starting anything
-stacks chainstate wipe [service] # delete on-disk state, all or one service (asks first)
-stacks chainstate status # compare every service's chain tip (stacks + bitcoin heights)
-stacks chainstate download # seed chainstate from the Hiro Archive (resumable, verified)
+stacksup config init      # write a stacks.toml
+stacksup start [service]  # validate, render, start enabled services (--no-render to skip render)
+stacksup status           # state of every service (managed and external)
+stacksup config check     # config coherence + connectivity checks
+stacksup logs [service]   # follow service logs
+stacksup logs export      # shareable, redacted support bundle (logs + diagnostics)
+stacksup stop [service]   # stop enabled services, keep containers+logs (--destroy to remove)
+stacksup restart [service] # stop + start so config/image changes take effect
+stacksup pull             # pull the latest images for every enabled service
+stacksup upgrade          # check registries for newer image versions (suggestions only)
+stacksup config render    # regenerate rendered/ without starting anything
+stacksup chainstate wipe [service] # delete on-disk state, all or one service (asks first)
+stacksup chainstate status # compare every service's chain tip (stacks + bitcoin heights)
+stacksup chainstate download # seed chainstate from the Hiro Archive (resumable, verified)
 ```
 
 ## The model
@@ -43,27 +43,27 @@ construction because they derive from one file. If you outgrow this tool,
 take `rendered/` and leave: it's plain compose + config files.
 
 When the node is `external` but the API or signer is `enabled`, the node must
-be configured to *push* to them; `stacks config render` emits
+be configured to *push* to them; `stacksup config render` emits
 `rendered/apply-to-your-node.toml` with the exact blocks to add on your side,
-and `stacks config check` verifies the loop is closed.
+and `stacksup config check` verifies the loop is closed.
 
 ## Development
 
 ```bash
 cargo run -- config init
 cargo run -- config render
-cargo build --release   # binary at target/release/stacks
+cargo build --release   # binary at target/release/stacksup
 ```
 
 ## Seeding chainstate
 
-`stacks chainstate download` fetches the node chainstate tarball and/or the
+`stacksup chainstate download` fetches the node chainstate tarball and/or the
 API's Postgres dump from the [Hiro Archive](https://docs.hiro.so/en/resources/archive/download-guide),
 verifies sha256, and restores them (untar for the node, `pg_restore` for the
 API). Downloads are resumable — Ctrl-C and re-run any time. Useful flags:
 `--service node|api|all`, `--archive <file|url|path>` to pin a specific
 archive, `--check-only` for a dry-run plan, `--yes` for unattended runs
-(`nohup stacks chainstate download --yes &`), `--no-verify`,
+(`nohup stacksup chainstate download --yes &`), `--no-verify`,
 `--skip-version-check`, `--keep-archives`. Always resolves versioned archives (never -latest pointers); the archive's version must be ≤
 the service's configured `version` in stacks.toml.
 

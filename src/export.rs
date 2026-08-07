@@ -1,4 +1,4 @@
-//! `stacks logs export` — package logs (and diagnostic context) into a
+//! `stacksup logs export` — package logs (and diagnostic context) into a
 //! shareable file for troubleshooting.
 //!
 //! Default output is a support bundle: per-service logs plus versions, ps,
@@ -42,8 +42,8 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         bail!("no enabled services in stacks.toml — nothing to export");
     }
 
-    // Containers that still exist (logs live inside them). `stacks stop`
-    // keeps them; `stacks stop --destroy` removes them along with their logs.
+    // Containers that still exist (logs live inside them). `stacksup stop`
+    // keeps them; `stacksup stop --destroy` removes them along with their logs.
     let existing: Vec<String> =
         crate::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
             .lines()
@@ -51,7 +51,7 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
             .collect();
     if !services.iter().any(|s| existing.contains(s)) {
         bail!(
-            "no containers exist for {} — logs are removed by `stacks stop --destroy`; \
+            "no containers exist for {} — logs are removed by `stacksup stop --destroy`; \
              reproduce the issue, then export before destroying the stack",
             services.join(", ")
         );
@@ -84,7 +84,7 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         let text = if existing.contains(name) {
             capture_logs(data_dir, name, &opts.since)
         } else {
-            "no container for this service (never started, or removed by `stacks stop --destroy`)\n"
+            "no container for this service (never started, or removed by `stacksup stop --destroy`)\n"
                 .to_string()
         };
         fs::write(

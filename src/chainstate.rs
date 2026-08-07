@@ -1,4 +1,4 @@
-//! `stacks chainstate` — operations on the stack's on-disk state.
+//! `stacksup chainstate` — operations on the stack's on-disk state.
 //! More subcommands (snapshot, restore, ...) will land here.
 
 use std::io::{self, Write};
@@ -19,7 +19,7 @@ struct Tip {
     note: Option<String>,
 }
 
-/// `stacks chainstate status` — compare every enabled service's chain tip.
+/// `stacksup chainstate status` — compare every enabled service's chain tip.
 ///
 /// Works whether the stack is running or stopped, with different coverage:
 /// the node's tips are read straight from its sqlite files (safe read-only
@@ -96,7 +96,7 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
                  This is NOT recoverable: the node has already processed blocks the API\n  \
                  never received events for, and it will not re-send them. The API's\n  \
                  database is permanently missing those blocks.\n  \
-                 Fix: `stacks stop && stacks chainstate wipe && stacks start` to re-sync\n  \
+                 Fix: `stacksup stop && stacksup chainstate wipe && stacksup start` to re-sync\n  \
                  from genesis, or restore a consistent snapshot."
             );
             println!("{}", error.red());
@@ -246,7 +246,7 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
         return tip;
     }
     if !postgres_running {
-        tip.note = Some("postgres is not running — `stacks start` to check the API's tip".into());
+        tip.note = Some("postgres is not running — `stacksup start` to check the API's tip".into());
         return tip;
     }
     let user = stack.postgres.user.as_deref().unwrap_or("postgres");
@@ -326,7 +326,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
             .collect();
         if !blocking.is_empty() {
             bail!(
-                "still running ({}) — stop them first with `stacks stop [service]`",
+                "still running ({}) — stop them first with `stacksup stop [service]`",
                 blocking
                     .iter()
                     .map(|s| s.as_str())

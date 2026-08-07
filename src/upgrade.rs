@@ -1,4 +1,4 @@
-//! `stacks upgrade` — suggestions only, never applies anything.
+//! `stacksup upgrade` — suggestions only, never applies anything.
 //!
 //! Compares each enabled service's configured version against what the image
 //! registries offer and prints per-service guidance. Domain rules baked in:
@@ -152,7 +152,7 @@ fn verdict(row: &Row, upgrades: &mut u32) -> (String, String) {
                 .or(row.next_major.as_ref())
                 .map(|v| version_string(v))
                 .unwrap_or_else(|| "-".into()),
-            "⚠ current version unknown — pin a version or `stacks pull`"
+            "⚠ current version unknown — pin a version or `stacksup pull`"
                 .yellow()
                 .to_string(),
         );
@@ -217,7 +217,7 @@ fn guidance(row: &Row) -> Option<String> {
             if let Some(m) = minor {
                 out.push_str(&format!(
                     "  stacks-api {}: same-major — DB-compatible. Set [stacks-api] version = \"{}\", \
-                     then `stacks pull && stacks stop && stacks start`.\n",
+                     then `stacksup pull && stacksup stop && stacksup start`.\n",
                     version_string(m),
                     version_string(m)
                 ));
@@ -226,11 +226,11 @@ fn guidance(row: &Row) -> Option<String> {
                 out.push_str(
                     &format!(
                         "  stacks-api {mj}: MAJOR — DB-BREAKING. The new API cannot migrate the old database:\n\
-                             1. `stacks stop`\n\
-                             2. `stacks chainstate wipe postgres` (API data only)\n\
-                             3. set [stacks-api] version = \"{mj}\" and `stacks pull`\n\
-                             4. `stacks chainstate download --service api` (archive matching the new major)\n\
-                             5. `stacks start`",
+                             1. `stacksup stop`\n\
+                             2. `stacksup chainstate wipe postgres` (API data only)\n\
+                             3. set [stacks-api] version = \"{mj}\" and `stacksup pull`\n\
+                             4. `stacksup chainstate download --service api` (archive matching the new major)\n\
+                             5. `stacksup start`",
                         mj = version_string(mj)
                     )
                     .red()
@@ -258,7 +258,7 @@ fn guidance(row: &Row) -> Option<String> {
             let v = minor.or(major)?;
             out.push_str(&format!(
                 "  {}: set version = \"{}\" (upgrade stacks-node and stacks-signer together), \
-                 then `stacks pull && stacks stop && stacks start`. Chainstate migrates forward automatically.",
+                 then `stacksup pull && stacksup stop && stacksup start`. Chainstate migrates forward automatically.",
                 row.name,
                 version_string(v)
             ));
@@ -266,7 +266,7 @@ fn guidance(row: &Row) -> Option<String> {
         _ => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  {}: set version = \"{}\", then `stacks pull && stacks stop && stacks start`.\n",
+                    "  {}: set version = \"{}\", then `stacksup pull && stacksup stop && stacksup start`.\n",
                     row.name,
                     version_string(m)
                 ));

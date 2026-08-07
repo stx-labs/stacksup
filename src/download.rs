@@ -1,4 +1,4 @@
-//! `stacks chainstate download` — seed chainstate from the Hiro Archive.
+//! `stacksup chainstate download` — seed chainstate from the Hiro Archive.
 //!
 //! Archives are huge (10s–100s of GB), so the pipeline is two-phase by
 //! design: download to `<data-dir>/downloads/<name>.partial` (resumable via
@@ -66,7 +66,7 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     if let Some(running) = crate::docker::running_services(data_dir) {
         if !running.is_empty() {
             bail!(
-                "the stack is running ({}) — run `stacks stop` first",
+                "the stack is running ({}) — run `stacksup stop` first",
                 running.join(", ")
             );
         }
@@ -200,7 +200,7 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     println!(
         "{}",
         "\nTip: safe to Ctrl-C and re-run later — downloads resume where they left off.\n\
-         To run unattended:  nohup stacks chainstate download --yes > download.log 2>&1 &\n"
+         To run unattended:  nohup stacksup chainstate download --yes > download.log 2>&1 &\n"
             .dimmed()
     );
 
@@ -257,7 +257,7 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     }
 
     println!("\n{}", "Done.".green());
-    println!("Next: `stacks start`, then `stacks chainstate status` to confirm the tips line up.");
+    println!("Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up.");
     Ok(())
 }
 

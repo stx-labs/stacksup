@@ -112,7 +112,7 @@ pub(crate) fn preflight(data_dir: &Path) -> Result<()> {
     ensure_docker()?;
     if !compose_file(data_dir).exists() {
         bail!(
-            "no rendered configs at {} — run `stacks config render` first",
+            "no rendered configs at {} — run `stacksup config render` first",
             compose_file(data_dir).display()
         );
     }
@@ -158,7 +158,7 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
     ensure_docker()?;
     if !compose_file(data_dir).exists() {
         bail!(
-            "no rendered configs at {} — run `stacks config render` first",
+            "no rendered configs at {} — run `stacksup config render` first",
             compose_file(data_dir).display()
         );
     }
@@ -170,7 +170,7 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
         cmd.args(["up", "-d", name]);
         run(cmd, "docker compose up")?;
         println!(
-            "\n{name} is starting. Follow along with `stacks status` or `stacks logs {name}`."
+            "\n{name} is starting. Follow along with `stacksup status` or `stacksup logs {name}`."
         );
         return Ok(());
     }
@@ -201,7 +201,7 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
     cmd.args(["up", "-d", "--remove-orphans"]);
     run(cmd, "docker compose up")?;
 
-    println!("\nStack is starting. Follow along with `stacks status` or `stacks logs`.");
+    println!("\nStack is starting. Follow along with `stacksup status` or `stacksup logs`.");
     Ok(())
 }
 
@@ -223,7 +223,7 @@ pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
     cmd.arg("pull");
     run(cmd, "docker compose pull")?;
     println!(
-        "\n{} images up to date — restart with `stacks stop && stacks start` to run them",
+        "\n{} images up to date — restart with `stacksup stop && stacksup start` to run them",
         "✓".green()
     );
     Ok(())
@@ -239,7 +239,7 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool
         let mut cmd = compose(data_dir);
         cmd.args(["stop", name]);
         run(cmd, "docker compose stop")?;
-        println!("{name} stopped. `stacks start {name}` to bring it back.");
+        println!("{name} stopped. `stacksup start {name}` to bring it back.");
         return Ok(());
     }
 
@@ -258,7 +258,7 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool
         run(cmd, "docker compose stop")?;
         println!(
             "{}",
-            "Containers kept (logs still available via `stacks logs`); use `stacks stop --destroy` to remove them."
+            "Containers kept (logs still available via `stacksup logs`); use `stacksup stop --destroy` to remove them."
                 .dimmed()
         );
     }
@@ -288,7 +288,7 @@ pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<
         let mut cmd = compose(data_dir);
         cmd.args(["up", "-d", name]);
         run(cmd, "docker compose up")?;
-        println!("\n{name} restarted. Follow along with `stacks logs {name}`.");
+        println!("\n{name} restarted. Follow along with `stacksup logs {name}`.");
         return Ok(());
     }
 
@@ -304,7 +304,7 @@ pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<
     let mut cmd = compose(data_dir);
     cmd.args(["up", "-d", "--remove-orphans"]);
     run(cmd, "docker compose up")?;
-    println!("\nStack restarted. Follow along with `stacks status` or `stacks logs`.");
+    println!("\nStack restarted. Follow along with `stacksup status` or `stacksup logs`.");
     Ok(())
 }
 

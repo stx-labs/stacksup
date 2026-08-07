@@ -255,7 +255,7 @@ impl Stack {
         {
             warnings.push(
                 "stacks-api is managed but the node is external: add the [[events_observer]] block \
-                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacks config check`"
+                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacksup config check`"
                     .into(),
             );
         }
@@ -273,7 +273,7 @@ pub fn load(path: &Path) -> Result<Stack> {
     };
     let raw = std::fs::read_to_string(&path).with_context(|| {
         format!(
-            "could not read {} (run `stacks config init` to create one)",
+            "could not read {} (run `stacksup config init` to create one)",
             path.display()
         )
     })?;
@@ -299,7 +299,7 @@ pub fn init(force: bool) -> Result<()> {
         bail!("stacks.toml already exists (use --force to overwrite)");
     }
     std::fs::write(path, DEFAULT_STACK_TOML)?;
-    println!("Wrote stacks.toml — edit it, then run `stacks start`.");
+    println!("Wrote stacks.toml — edit it, then run `stacksup start`.");
     Ok(())
 }
 

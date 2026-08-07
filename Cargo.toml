@@ -1,15 +1,13 @@
 [package]
-name = "stacks-cli"
+name = "stacksup"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.94.0"
 description = "One command to run a Stacks stack: bitcoind, stacks-node, signer, APIs, Postgres"
 repository = "https://github.com/stacks-network/stacks-tool"
 
-# The crate is `stacks-cli` (the bare `stacks` name is squatted on crates.io),
-# but the installed binary is `stacks`.
 [[bin]]
-name = "stacks"
+name = "stacksup"
 path = "src/main.rs"
 
 [dependencies]
