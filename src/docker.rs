@@ -94,8 +94,46 @@ fn run(mut cmd: Command, what: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn start(stack: &Stack, data_dir: &Path) -> Result<()> {
+/// A service name is only startable/stoppable if it's enabled in stacks.toml.
+fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
+    match roster(stack).iter().find(|(n, _)| *n == name) {
+        Some((_, ServiceMode::Enabled)) => Ok(()),
+        Some((_, mode)) => bail!(
+            "{name} is `{}` in stacks.toml — only enabled services can be started/stopped here",
+            match mode {
+                ServiceMode::External => "external",
+                _ => "disabled",
+            }
+        ),
+        None => {
+            let enabled: Vec<&str> = roster(stack)
+                .into_iter()
+                .filter(|(_, m)| *m == ServiceMode::Enabled)
+                .map(|(n, _)| n)
+                .collect();
+            bail!("unknown service `{name}` — enabled services: {}", enabled.join(", "))
+        }
+    }
+}
+
+pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
     ensure_docker()?;
+    if !compose_file(data_dir).exists() {
+        bail!(
+            "no rendered configs at {} — run `stacks config render` first",
+            compose_file(data_dir).display()
+        );
+    }
+
+    if let Some(name) = service {
+        ensure_enabled(stack, name)?;
+        println!("Starting {name} (and its dependencies)...");
+        let mut cmd = compose(data_dir);
+        cmd.args(["up", "-d", name]);
+        run(cmd, "docker compose up")?;
+        println!("\n{name} is starting. Follow along with `stacks status` or `stacks logs {name}`.");
+        return Ok(());
+    }
 
     let managed: Vec<_> =
         roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
@@ -140,8 +178,20 @@ pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn stop(stack: &Stack, data_dir: &Path) -> Result<()> {
+pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
     ensure_docker()?;
+
+    if let Some(name) = service {
+        ensure_enabled(stack, name)?;
+        // Single service: `compose stop` halts just that container, leaving
+        // the rest of the stack (and the network) running.
+        let mut cmd = compose(data_dir);
+        cmd.args(["stop", name]);
+        run(cmd, "docker compose stop")?;
+        println!("{name} stopped. `stacks start {name}` to bring it back.");
+        return Ok(());
+    }
+
     // `down` only ever touches the compose project; external services and
     // their data are outside this tool's blast radius by construction.
     let mut cmd = compose(data_dir);

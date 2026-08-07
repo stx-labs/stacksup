@@ -41,9 +41,18 @@ enum Command {
         command: ConfigCommand,
     },
     /// Validate config, render service configs, and start enabled services
-    Start,
+    Start {
+        /// Single service to start (e.g. stacks-node); omit to start all
+        service: Option<String>,
+        /// Start from the existing rendered/ configs without re-rendering
+        #[arg(long)]
+        no_render: bool,
+    },
     /// Stop enabled services (external services are never touched)
-    Stop,
+    Stop {
+        /// Single service to stop (e.g. stacks-node); omit to stop all
+        service: Option<String>,
+    },
     /// Pull the latest images for every enabled service
     Pull,
     /// Show the state of every service in the stack
@@ -140,14 +149,16 @@ fn run() -> Result<()> {
             println!("Rendered service configs to {}/", dir.display());
             Ok(())
         }
-        Command::Start => {
+        Command::Start { service, no_render } => {
             let stack = config::load(&cli.config)?;
-            render::render(&stack, &cli.data_dir)?;
-            docker::start(&stack, &cli.data_dir)
+            if !no_render {
+                render::render(&stack, &cli.data_dir)?;
+            }
+            docker::start(&stack, &cli.data_dir, service.as_deref())
         }
-        Command::Stop => {
+        Command::Stop { service } => {
             let stack = config::load(&cli.config)?;
-            docker::stop(&stack, &cli.data_dir)
+            docker::stop(&stack, &cli.data_dir, service.as_deref())
         }
         Command::Pull => {
             let stack = config::load(&cli.config)?;

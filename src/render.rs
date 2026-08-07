@@ -31,16 +31,16 @@ const GENERATED_HEADER: &str =
 
 /// Events the stacks-api observer subscribes to (everywhere it is wired).
 ///
-/// "*" delivers exactly /new_block (with all events unfiltered), /new_burn_block,
-/// /new_mempool_tx, and /drop_mempool_tx — and does NOT include /stackerdb_chunks
-/// or /proposal_response (stacks-core docs/event-dispatcher.md). Don't narrow it
-/// to ["stx", ...]: that filters /new_block's events to STX-only, dropping the
-/// FT/NFT/contract events the API indexes. Invalid keys panic the node at startup.
+/// "*" delivers exactly /new_block (with all events unfiltered), /new_burn_block, /new_mempool_tx,
+/// and /drop_mempool_tx — and does NOT include /stackerdb_chunks or /proposal_response (stacks-core
+/// docs/event-dispatcher.md). Don't narrow it to ["stx", ...]: that filters /new_block's events to
+/// STX-only, dropping the FT/NFT/contract events the API indexes. Invalid keys panic the node at
+/// startup.
 const API_EVENTS_KEYS: &str = r#"["*"]"#;
 
-/// The Postgres database and schema the blockchain API owns. Fixed names:
-/// they only apply to the managed Postgres (an external API brings its own
-/// database, and an external Postgres pairs with an enabled API via these).
+/// The Postgres database and schema the blockchain API owns. Fixed names: they only apply to the
+/// managed Postgres (an external API brings its own database, and an external Postgres pairs with
+/// an enabled API via these).
 const API_PG_DATABASE: &str = "stacks_blockchain_api";
 const API_PG_SCHEMA: &str = "stacks_blockchain_api";
 
@@ -146,6 +146,11 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
     }
 
     if stack.stacks_mesh_api.mode == ServiceMode::Enabled {
+        std::fs::create_dir_all(dir.join("stacks-mesh-api"))?;
+        std::fs::write(
+            dir.join("stacks-mesh-api/.env"),
+            format!("{GENERATED_HEADER}{}", mesh_api_env(stack)),
+        )?;
         compose.services.insert("stacks-mesh-api".into(), mesh_api_service(stack));
     }
 
@@ -233,16 +238,26 @@ fn api_service(stack: &Stack) -> ComposeService {
 }
 
 fn mesh_api_service(stack: &Stack) -> ComposeService {
-    // TODO(hackathon): confirm the mesh API's real config surface (env var
-    // names, whether it also consumes node events).
     let mut svc = ComposeService::new("stacks-mesh-api", &stacks_mesh_api_image(stack));
     svc.ports = vec![format!("{MESH_API_PORT}:{MESH_API_PORT}")];
-    let node_host = node_rpc_host(stack).unwrap_or_default();
-    svc.environment.insert("STACKS_NODE_RPC_URL".into(), format!("http://{node_host}:{}", node_rpc_port(stack)));
+    svc.env_file = vec!["./stacks-mesh-api/.env".into()];
     if stack.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
     svc
+}
+
+/// Postgres major from the configured version tag: "17" -> 17,
+/// "17.5-alpine" -> 17, "latest"/absent -> None.
+fn postgres_major(stack: &Stack) -> Option<u32> {
+    stack
+        .postgres
+        .version
+        .as_deref()?
+        .split(['.', '-'])
+        .next()?
+        .parse()
+        .ok()
 }
 
 fn postgres_service(stack: &Stack) -> ComposeService {
@@ -253,10 +268,15 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     svc.environment.insert("POSTGRES_PASSWORD".into(), stack.postgres.password.clone().unwrap_or_else(|| "postgres".into()));
     svc.environment.insert("POSTGRES_DB".into(), API_PG_DATABASE.into());
     // Postgres 18+ images keep data in a version-specific subdirectory and
-    // require the mount at /var/lib/postgresql (not .../data), enabling
-    // pg_upgrade across majors. Tags <= 17 need .../data instead.
+    // require the mount at /var/lib/postgresql (enabling pg_upgrade across
+    // majors); images <= 17 use PGDATA=/var/lib/postgresql/data and need the
+    // mount there. Unknown majors (e.g. `latest`) get the 18+ convention.
+    let data_target = match postgres_major(stack) {
+        Some(major) if major <= 17 => "/var/lib/postgresql/data",
+        _ => "/var/lib/postgresql",
+    };
     svc.volumes = vec![
-        "../chainstate/postgres:/var/lib/postgresql".into(),
+        format!("../chainstate/postgres:{data_target}"),
         // Read-only view of downloaded archives so pg_restore (which needs a
         // seekable file, not stdin) can restore dumps fetched by
         // `stacks chainstate download`.
@@ -412,6 +432,28 @@ TESTNET_SBTC_FAUCET_ENABLED=false
         pg_user = stack.postgres.user.as_deref().unwrap_or("postgres"),
         pg_password = stack.postgres.password.as_deref().unwrap_or("postgres"),
         pg_db = API_PG_DATABASE,
+    )
+}
+
+/// Env for the Stacks Mesh API (packages/api/src/env.ts is the schema of
+/// record). Online mode needs the node's RPC endpoint and — critically — the
+/// node's `connection_options.auth_token`, which this render guarantees
+/// matches by deriving both from the same source. Cache sizes/TTLs and
+/// BLOCK_HASH_MODE are left to the service's own defaults.
+fn mesh_api_env(stack: &Stack) -> String {
+    let node_host = node_rpc_host(stack).unwrap_or_default();
+    format!(
+        r#"API_HOST=0.0.0.0
+API_PORT={api_port}
+MODE=online
+STACKS_CORE_RPC_SCHEME=http
+STACKS_CORE_RPC_HOST={node_host}
+STACKS_CORE_RPC_PORT={node_rpc}
+STACKS_CORE_RPC_AUTH_TOKEN={auth_token}
+"#,
+        api_port = MESH_API_PORT,
+        node_rpc = node_rpc_port(stack),
+        auth_token = node_auth_token(stack),
     )
 }
 

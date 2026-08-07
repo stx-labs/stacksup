@@ -64,7 +64,10 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
 
     if let Some(running) = crate::docker::running_services(data_dir) {
         if !running.is_empty() {
-            bail!("the stack is running ({}) — run `stacks stop` first", running.join(", "));
+            bail!(
+                "the stack is running ({}) — run `stacks stop` first",
+                running.join(", ")
+            );
         }
     }
 
@@ -86,12 +89,18 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
         bail!("[stacks-api] is not enabled in stacks.toml");
     }
     if want_api && stack.postgres.mode != ServiceMode::Enabled {
-        bail!("restoring the API archive needs the managed postgres ([postgres] mode = \"enabled\")");
+        bail!(
+            "restoring the API archive needs the managed postgres ([postgres] mode = \"enabled\")"
+        );
     }
 
     if let Some(archive) = &opts.archive {
         // --archive pairs with exactly one service (enforced in main.rs too).
-        let kind = if matches!(opts.service, ServiceSel::Node) { Kind::Node } else { Kind::Api };
+        let kind = if matches!(opts.service, ServiceSel::Node) {
+            Kind::Node
+        } else {
+            Kind::Api
+        };
         jobs.push(pinned_job(kind, archive, network, stack, &downloads_dir)?);
     } else {
         if want_node {
@@ -132,7 +141,10 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
                 version_problem = true;
             }
             VersionVerdict::Unknown(reason) => {
-                println!("    {}", format!("⚠ cannot verify version compatibility: {reason}").yellow())
+                println!(
+                    "    {}",
+                    format!("⚠ cannot verify version compatibility: {reason}").yellow()
+                )
             }
         }
     }
@@ -193,7 +205,12 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
 
     // ---- Download, verify, restore --------------------------------------
     for job in &jobs {
-        let name = job.file.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = job
+            .file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         if let Some(url) = &job.url {
             if job.file.exists() {
@@ -252,7 +269,11 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
 /// archive-version ≤ configured-version check.
 fn latest_node_job(network: &str, stack: &Stack, downloads: &Path) -> Result<Job> {
     let base = format!("{ARCHIVE_BASE}/{network}/stacks-blockchain");
-    let name = newest_in_listing(&base, &format!("{network}-stacks-blockchain-"), &[".tar.zst", ".tar.gz"])?;
+    let name = newest_in_listing(
+        &base,
+        &format!("{network}-stacks-blockchain-"),
+        &[".tar.zst", ".tar.gz"],
+    )?;
     versioned_job(Kind::Node, &base, &name, stack, downloads)
 }
 
@@ -262,7 +283,13 @@ fn latest_api_job(network: &str, stack: &Stack, downloads: &Path) -> Result<Job>
     versioned_job(Kind::Api, &base, &name, stack, downloads)
 }
 
-fn versioned_job(kind: Kind, base: &str, name: &str, stack: &Stack, downloads: &Path) -> Result<Job> {
+fn versioned_job(
+    kind: Kind,
+    base: &str,
+    name: &str,
+    stack: &Stack,
+    downloads: &Path,
+) -> Result<Job> {
     let url = format!("{base}/{name}");
     let size = head_content_length(&url).with_context(|| format!("archive not found at {url}"))?;
     let image = match kind {
@@ -296,10 +323,15 @@ fn newest_in_listing(base: &str, prefix: &str, extensions: &[&str]) -> Result<St
         {
             continue;
         }
-        let Some(date) = parse_date_from_name(&name) else { continue };
+        let Some(date) = parse_date_from_name(&name) else {
+            continue;
+        };
         let version = parse_version_from_name(&name, Kind::Node).unwrap_or_default();
         let candidate = (date, version, name);
-        if best.as_ref().is_none_or(|b| (candidate.0, &candidate.1) > (b.0, &b.1)) {
+        if best
+            .as_ref()
+            .is_none_or(|b| (candidate.0, &candidate.1) > (b.0, &b.1))
+        {
             best = Some(candidate);
         }
     }
@@ -340,7 +372,13 @@ fn parse_date_from_name(name: &str) -> Option<u64> {
         .next_back()
 }
 
-fn pinned_job(kind: Kind, archive: &str, network: &str, stack: &Stack, downloads: &Path) -> Result<Job> {
+fn pinned_job(
+    kind: Kind,
+    archive: &str,
+    network: &str,
+    stack: &Stack,
+    downloads: &Path,
+) -> Result<Job> {
     let image = match kind {
         Kind::Node => crate::services::stacks_node_image(stack),
         Kind::Api => crate::services::stacks_api_image(stack),
@@ -385,13 +423,16 @@ fn pinned_job(kind: Kind, archive: &str, network: &str, stack: &Stack, downloads
     }
 
     // A filename that names the other network is a subtle disaster; block it.
-    let other = if network == "mainnet" { "testnet" } else { "mainnet" };
+    let other = if network == "mainnet" {
+        "testnet"
+    } else {
+        "mainnet"
+    };
     if name.starts_with(other) {
         bail!("archive `{name}` is for {other}, but stacks.toml says network = \"{network}\"");
     }
 
-    let size = head_content_length(&url)
-        .with_context(|| format!("archive not found at {url}"))?;
+    let size = head_content_length(&url).with_context(|| format!("archive not found at {url}"))?;
     Ok(Job {
         kind,
         url: Some(url),
@@ -416,7 +457,9 @@ fn version_verdict(job: &Job) -> VersionVerdict {
     // Only inspected when the tag alone can't settle it (floating tags like
     // `9` or `latest`): the pulled image's OCI version label carries the
     // concrete version (e.g. tag `9` -> label `9.0.2`).
-    classify_version(job.archive_version.as_deref(), &tag, || pulled_image_version(&job.image))
+    classify_version(job.archive_version.as_deref(), &tag, || {
+        pulled_image_version(&job.image)
+    })
 }
 
 fn classify_version(
@@ -440,7 +483,10 @@ fn classify_version(
             if archive.starts_with(&conf) {
                 match pulled() {
                     Some(p) if compare_versions(archive, &p) != std::cmp::Ordering::Greater => {
-                        VersionVerdict::Ok(a, format!("{} (pulled image for tag `{tag}`)", version_string(&p)))
+                        VersionVerdict::Ok(
+                            a,
+                            format!("{} (pulled image for tag `{tag}`)", version_string(&p)),
+                        )
                     }
                     Some(p) => VersionVerdict::TooNew(
                         a,
@@ -460,11 +506,17 @@ fn classify_version(
         }
         None => match pulled() {
             Some(p) if compare_versions(archive, &p) != std::cmp::Ordering::Greater => {
-                VersionVerdict::Ok(a, format!("{} (pulled image for tag `{tag}`)", version_string(&p)))
+                VersionVerdict::Ok(
+                    a,
+                    format!("{} (pulled image for tag `{tag}`)", version_string(&p)),
+                )
             }
             Some(p) => VersionVerdict::TooNew(
                 a,
-                format!("{} (pulled image for tag `{tag}` — `docker pull` a newer one)", version_string(&p)),
+                format!(
+                    "{} (pulled image for tag `{tag}` — `docker pull` a newer one)",
+                    version_string(&p)
+                ),
             ),
             None => VersionVerdict::Unknown(format!(
                 "configured tag is `{tag}` and no pulled image to inspect — pin a version in \
@@ -491,7 +543,10 @@ fn pulled_image_version(image: &str) -> Option<Vec<u64>> {
     if !out.status.success() {
         return None;
     }
-    let label = String::from_utf8_lossy(&out.stdout).trim().trim_start_matches('v').to_string();
+    let label = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
     parse_version(&label)
 }
 
@@ -509,7 +564,11 @@ fn parse_version_from_name(name: &str, _kind: Kind) -> Option<Vec<u64>> {
                 .split('.')
                 .take_while(|part| part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty())
                 .collect();
-            if cleaned.len() >= 2 { parse_version(&cleaned.join(".")) } else { None }
+            if cleaned.len() >= 2 {
+                parse_version(&cleaned.join("."))
+            } else {
+                None
+            }
         })
         .next()
 }
@@ -607,7 +666,9 @@ fn download_resumable(url: &str, dest: &Path, expected_size: Option<u64>) -> Res
     if offset > 0 {
         req = req.set("Range", &format!("bytes={offset}-"));
     }
-    let resp = req.call().with_context(|| format!("request failed: {url}"))?;
+    let resp = req
+        .call()
+        .with_context(|| format!("request failed: {url}"))?;
 
     // Stale-partial guard: if the server's object changed since we started,
     // the old bytes belong to a different archive.
@@ -630,7 +691,9 @@ fn download_resumable(url: &str, dest: &Path, expected_size: Option<u64>) -> Res
     fs::write(&etag_file, &server_etag)?;
 
     let total = expected_size.or_else(|| {
-        resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).map(|l| l + offset)
+        resp.header("Content-Length")
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|l| l + offset)
     });
     stream_to_file(resp.into_reader(), &partial, offset, total)?;
     finish_download(&partial, &etag_file, dest, expected_size)
@@ -642,8 +705,14 @@ fn download_resumable_fresh(url: &str, dest: &Path, expected_size: Option<u64>) 
         dest.extension().unwrap_or_default().to_string_lossy()
     ));
     let etag_file = partial.with_extension("etag");
-    let resp = ureq::get(url).call().with_context(|| format!("request failed: {url}"))?;
-    let etag = resp.header("ETag").or_else(|| resp.header("Last-Modified")).unwrap_or("").to_string();
+    let resp = ureq::get(url)
+        .call()
+        .with_context(|| format!("request failed: {url}"))?;
+    let etag = resp
+        .header("ETag")
+        .or_else(|| resp.header("Last-Modified"))
+        .unwrap_or("")
+        .to_string();
     fs::write(&etag_file, etag)?;
     let total =
         expected_size.or_else(|| resp.header("Content-Length").and_then(|v| v.parse().ok()));
@@ -666,7 +735,9 @@ fn stream_to_file(
     let mut writer = BufWriter::new(file);
     let mut buf = [0u8; 1 << 16];
     loop {
-        let n = reader.read(&mut buf).context("download interrupted — re-run to resume")?;
+        let n = reader
+            .read(&mut buf)
+            .context("download interrupted — re-run to resume")?;
         if n == 0 {
             break;
         }
@@ -708,13 +779,19 @@ fn fetch_expected_sha256(job: &Job) -> Option<String> {
         Some(url) => {
             // node: `...-latest.tar.zst` -> `...-latest.sha256`; also try `<full>.sha256`
             let base = url.rsplit_once('/').map(|(b, _)| b.to_string())?;
-            let stem = name.split(".tar").next().unwrap_or(&name).trim_end_matches(".dump");
+            let stem = name
+                .split(".tar")
+                .next()
+                .unwrap_or(&name)
+                .trim_end_matches(".dump");
             vec![format!("{base}/{stem}.sha256"), format!("{}.sha256", url)]
         }
         None => {
             // local archive: look for a sidecar next to it
             let sidecar = job.file.with_extension("sha256");
-            return fs::read_to_string(sidecar).ok().and_then(|s| parse_sha_line(&s));
+            return fs::read_to_string(sidecar)
+                .ok()
+                .and_then(|s| parse_sha_line(&s));
         }
     };
     for url in candidates {
@@ -772,7 +849,10 @@ fn restore_node(archive: &Path, stack: &Stack, data_dir: &Path) -> Result<()> {
     let file = File::open(archive)?;
     let total = file.metadata()?.len();
     let bar = byte_bar(Some(total), 0);
-    let counted = CountingReader { inner: BufReader::new(file), bar: bar.clone() };
+    let counted = CountingReader {
+        inner: BufReader::new(file),
+        bar: bar.clone(),
+    };
 
     let name = archive.file_name().unwrap_or_default().to_string_lossy();
     if name.ends_with(".zst") {
@@ -804,7 +884,11 @@ fn restore_node(archive: &Path, stack: &Stack, data_dir: &Path) -> Result<()> {
     }
     fs::rename(&src, &dst)?;
     let _ = fs::remove_dir_all(&tmp);
-    println!("  {} node chainstate restored to {}", "✓".green(), dst.display());
+    println!(
+        "  {} node chainstate restored to {}",
+        "✓".green(),
+        dst.display()
+    );
     Ok(())
 }
 
@@ -818,11 +902,17 @@ fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path
         dump.to_path_buf()
     } else {
         let staged = downloads_dir.join(dump.file_name().unwrap_or_default());
-        println!("Staging dump into {} (visible to the postgres container)...", downloads_dir.display());
+        println!(
+            "Staging dump into {} (visible to the postgres container)...",
+            downloads_dir.display()
+        );
         fs::copy(dump, &staged)?;
         staged
     };
-    let in_container = format!("/downloads/{}", dump.file_name().unwrap_or_default().to_string_lossy());
+    let in_container = format!(
+        "/downloads/{}",
+        dump.file_name().unwrap_or_default().to_string_lossy()
+    );
     let user = stack.postgres.user.as_deref().unwrap_or("postgres");
 
     println!("Starting postgres...");
@@ -846,13 +936,20 @@ fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path
     );
     let mut child = Command::new("docker")
         .args([
-            "exec", "stacks-postgres", "pg_restore",
-            "--username", user,
+            "exec",
+            "stacks-postgres",
+            "pg_restore",
+            "--username",
+            user,
             "--verbose",
-            "--jobs", "4",
-            "--clean", "--if-exists",
-            "--no-owner", "--no-acl",
-            "--dbname", "stacks_blockchain_api",
+            "--jobs",
+            "4",
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-acl",
+            "--dbname",
+            "stacks_blockchain_api",
             &in_container,
         ])
         .stdout(Stdio::null())
@@ -918,7 +1015,9 @@ fn byte_bar(total: Option<u64>, start: u64) -> ProgressBar {
         }
         None => {
             let b = ProgressBar::new_spinner();
-            b.set_style(ProgressStyle::with_template("  {spinner} {bytes} {bytes_per_sec}").unwrap());
+            b.set_style(
+                ProgressStyle::with_template("  {spinner} {bytes} {bytes_per_sec}").unwrap(),
+            );
             b
         }
     };
@@ -971,7 +1070,10 @@ mod tests {
     #[test]
     fn parses_node_archive_version() {
         assert_eq!(
-            parse_version_from_name("mainnet-stacks-blockchain-3.1.0.0.8-20260803.tar.gz", Kind::Node),
+            parse_version_from_name(
+                "mainnet-stacks-blockchain-3.1.0.0.8-20260803.tar.gz",
+                Kind::Node
+            ),
             Some(vec![3, 1, 0, 0, 8])
         );
     }
@@ -986,8 +1088,14 @@ mod tests {
 
     #[test]
     fn latest_has_no_version() {
-        assert_eq!(parse_version_from_name("mainnet-stacks-blockchain-latest.tar.zst", Kind::Node), None);
-        assert_eq!(parse_version_from_name("stacks-blockchain-api-pg-17-latest.dump", Kind::Api), None);
+        assert_eq!(
+            parse_version_from_name("mainnet-stacks-blockchain-latest.tar.zst", Kind::Node),
+            None
+        );
+        assert_eq!(
+            parse_version_from_name("stacks-blockchain-api-pg-17-latest.dump", Kind::Api),
+            None
+        );
     }
 
     #[test]
@@ -1008,7 +1116,9 @@ mod tests {
             <a href="/t/x/testnet-stacks-blockchain-3.4.0.0.4-20260712.tar.zst">c</a>
         "#;
         let names = extract_hrefs(html);
-        assert!(names.contains(&"testnet-stacks-blockchain-3.4.0.0.4-20260713.tar.zst".to_string()));
+        assert!(
+            names.contains(&"testnet-stacks-blockchain-3.4.0.0.4-20260713.tar.zst".to_string())
+        );
         // simulate newest_in_listing's filter+pick on the extracted names
         let best = names
             .iter()
@@ -1019,7 +1129,10 @@ mod tests {
             })
             .filter_map(|n| parse_date_from_name(n).map(|d| (d, n)))
             .max();
-        assert_eq!(best.unwrap().1, "testnet-stacks-blockchain-3.4.0.0.4-20260713.tar.zst");
+        assert_eq!(
+            best.unwrap().1,
+            "testnet-stacks-blockchain-3.4.0.0.4-20260713.tar.zst"
+        );
     }
 
     #[test]
@@ -1046,8 +1159,14 @@ mod tests {
 
     #[test]
     fn parses_date_segment() {
-        assert_eq!(parse_date_from_name("stacks-blockchain-api-pg-17-8.15.0-20260711.dump"), Some(20260711));
-        assert_eq!(parse_date_from_name("testnet-stacks-blockchain-latest.tar.zst"), None);
+        assert_eq!(
+            parse_date_from_name("stacks-blockchain-api-pg-17-8.15.0-20260711.dump"),
+            Some(20260711)
+        );
+        assert_eq!(
+            parse_date_from_name("testnet-stacks-blockchain-latest.tar.zst"),
+            None
+        );
     }
 
     #[test]
