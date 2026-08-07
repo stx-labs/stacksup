@@ -303,11 +303,131 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     svc
 }
 
+/// Testnet (krypton) network parameters, mirroring stacks-core's
+/// sample/conf/testnet-follower-conf.toml. The krypton burnchain is the
+/// Hiro-hosted bitcoin *regtest*, not the public bitcoin testnet.
+const TESTNET_BOOTSTRAP_NODE: &str =
+    "0348af7ce1b224476e8f042727af3f84dcf49a69bb3c9dd2a1afaa783acfffb729@seed.testnet.hiro.so:20444";
+const TESTNET_BURNCHAIN_HOST: &str = "bitcoin.regtest.hiro.so";
+
+const TESTNET_NODE_POX5: &str = r#"pox_5_sbtc_contract = "SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token"
+pox_5_sbtc_registry_contract = "SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-registry"
+pox_5_bond_admin = "ST1V2ASRWGR81W7GBN1Z4W2JQKXJWCADPVZG30X45"
+"#;
+
+const TESTNET_USTX_BALANCES: &str = r#"[[ustx_balance]]
+address = "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST31XHNM0GZ2K978FPP4QA3STNQ73Z8C9G9MJEPK2"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST1B38CGQRPXEMRH7B66VXTS22DQTNMSW4YJJ7QK1"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "STDMN71Z0H9EF8CRKAWTGBB5YS0BNV26HZ79QFFP"
+amount = 1000000000000000
+
+[[ustx_balance]]
+address = "ST1E0PSCH72JMQH9QCH293ZTEEH7BPA40Y3F39XQ"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST3QBTK0Q438YVNX8EG6Z85HN0WKQPXYT25H5SPPK"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST10BX04F9PC6N1WBXKW3H7CG0NS0A3PK650T3P3R"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST3AF1BBQAFSFCM8K4ZBR1FBXP3P8J1CKGSGDHWR5"
+amount = 100000000000000
+
+[[ustx_balance]]
+address = "STHY13V44422NAN6D3NSJPY9CDR3ED1M6HH9WZ6Y"
+amount = 10000000000000
+"#;
+
+const TESTNET_EPOCHS: &str = r#"[[burnchain.epochs]]
+epoch_name = "1.0"
+start_height = 0
+
+[[burnchain.epochs]]
+epoch_name = "2.0"
+start_height = 0
+
+[[burnchain.epochs]]
+epoch_name = "2.05"
+start_height = 1
+
+[[burnchain.epochs]]
+epoch_name = "2.1"
+start_height = 2
+
+[[burnchain.epochs]]
+epoch_name = "2.2"
+start_height = 3
+
+[[burnchain.epochs]]
+epoch_name = "2.3"
+start_height = 4
+
+[[burnchain.epochs]]
+epoch_name = "2.4"
+start_height = 5
+
+[[burnchain.epochs]]
+epoch_name = "2.5"
+start_height = 6
+
+[[burnchain.epochs]]
+epoch_name = "3.0"
+start_height = 1802
+
+[[burnchain.epochs]]
+epoch_name = "3.1"
+start_height = 1803
+
+[[burnchain.epochs]]
+epoch_name = "3.2"
+start_height = 1804
+
+[[burnchain.epochs]]
+epoch_name = "3.3"
+start_height = 1805
+
+[[burnchain.epochs]]
+epoch_name = "3.4"
+start_height = 1806
+
+[[burnchain.epochs]]
+epoch_name = "4.0"
+start_height = 2702
+"#;
+
 /// The stacks-node Config.toml. Cross-service values (bitcoind endpoint, event
 /// observers, signer auth) are derived from the same `Stack` the other configs
-/// come from — matched by construction.
+/// come from — matched by construction. The testnet shape mirrors
+/// stacks-core's sample/conf/testnet-follower-conf.toml.
 fn node_config_toml(stack: &Stack) -> String {
     let mut out = String::new();
+    let testnet = stack.network == Network::Testnet;
 
     let (burn_mode, chain) = match stack.network {
         Network::Mainnet => ("mainnet", "bitcoin"),
@@ -319,10 +439,16 @@ fn node_config_toml(stack: &Stack) -> String {
     out.push_str("working_dir = \"/stacks-blockchain\"\n");
     out.push_str(&format!("rpc_bind = \"0.0.0.0:{NODE_RPC_PORT}\"\n"));
     out.push_str(&format!("p2p_bind = \"0.0.0.0:{NODE_P2P_PORT}\"\n"));
+    if testnet {
+        out.push_str(&format!("bootstrap_node = \"{TESTNET_BOOTSTRAP_NODE}\"\n"));
+    }
     if stack.stacks_signer.mode != ServiceMode::Disabled {
         out.push_str("stacker = true\n");
     } else {
         out.push_str("miner = false\nstacker = false\n");
+    }
+    if testnet {
+        out.push_str(TESTNET_NODE_POX5);
     }
     out.push('\n');
 
@@ -332,7 +458,22 @@ fn node_config_toml(stack: &Stack) -> String {
 
     out.push_str("[burnchain]\n");
     out.push_str(&format!("mode = \"{burn_mode}\"\nchain = \"{chain}\"\n"));
-    if let Some(host) = bitcoind_host(stack) {
+    if testnet {
+        // Krypton follows the Hiro-hosted regtest unless an external bitcoind
+        // is explicitly configured (a locally managed one is rejected at
+        // validation: its empty regtest chain cannot follow Hiro's).
+        let host = stack
+            .bitcoind
+            .host
+            .clone()
+            .filter(|_| stack.bitcoind.mode == ServiceMode::External)
+            .unwrap_or_else(|| TESTNET_BURNCHAIN_HOST.into());
+        let rpc = stack.bitcoind.rpc_port.unwrap_or(bitcoind_rpc_port(stack.network));
+        let p2p = stack.bitcoind.p2p_port.unwrap_or(bitcoind_p2p_port(stack.network));
+        out.push_str(&format!("peer_host = \"{host}\"\n"));
+        out.push_str(&format!("rpc_port = {rpc}\npeer_port = {p2p}\n"));
+        out.push_str("pox_prepare_length = 100\npox_reward_length = 900\n");
+    } else if let Some(host) = bitcoind_host(stack) {
         let rpc = stack.bitcoind.rpc_port.unwrap_or(bitcoind_rpc_port(stack.network));
         let p2p = stack.bitcoind.p2p_port.unwrap_or(bitcoind_p2p_port(stack.network));
         out.push_str(&format!("peer_host = \"{host}\"\n"));
@@ -361,6 +502,12 @@ fn node_config_toml(stack: &Stack) -> String {
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"stacks-signer:{SIGNER_ENDPOINT_PORT}\"\nevents_keys = [\"stackerdb\", \"block_proposal\", \"burn_blocks\"]\n\n"
         ));
+    }
+
+    if testnet {
+        out.push_str(TESTNET_USTX_BALANCES);
+        out.push('\n');
+        out.push_str(TESTNET_EPOCHS);
     }
 
     out

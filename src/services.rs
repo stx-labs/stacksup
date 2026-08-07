@@ -46,17 +46,19 @@ pub const MESH_API_PORT: u16 = 3998;
 pub const SIGNER_ENDPOINT_PORT: u16 = 30000;
 pub const POSTGRES_PORT: u16 = 5432;
 
+// Non-mainnet networks are bitcoin *regtest* (krypton testnet follows the
+// Hiro-hosted regtest), hence the 18443/18444 regtest ports.
 pub fn bitcoind_rpc_port(network: Network) -> u16 {
     match network {
         Network::Mainnet => 8332,
-        _ => 18332,
+        _ => 18443,
     }
 }
 
 pub fn bitcoind_p2p_port(network: Network) -> u16 {
     match network {
         Network::Mainnet => 8333,
-        _ => 18333,
+        _ => 18444,
     }
 }
 

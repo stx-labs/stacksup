@@ -160,14 +160,24 @@ impl Stack {
         if mocknet && self.bitcoind.mode != ServiceMode::Disabled {
             errors.push("mocknet simulates the burnchain; set [bitcoind] mode = \"disabled\"".into());
         }
-        if !mocknet
+        // Only a mainnet node needs its own bitcoind: krypton testnet follows
+        // the Hiro-hosted bitcoin regtest, and mocknet simulates the burnchain.
+        if self.network == Network::Mainnet
             && self.stacks_node.mode == ServiceMode::Enabled
             && self.bitcoind.mode == ServiceMode::Disabled
         {
-            errors.push(format!(
-                "a {} stacks-node requires bitcoind; set [bitcoind] mode = \"enabled\" or \"external\"",
-                self.network
-            ));
+            errors.push(
+                "a mainnet stacks-node requires bitcoind; set [bitcoind] mode = \"enabled\" or \"external\""
+                    .into(),
+            );
+        }
+        if self.network == Network::Testnet && self.bitcoind.mode == ServiceMode::Enabled {
+            errors.push(
+                "testnet (krypton) follows the Hiro-hosted bitcoin regtest — a locally managed \
+                 bitcoind cannot join it; set [bitcoind] mode = \"disabled\" (default endpoint) \
+                 or \"external\" to point at another krypton regtest"
+                    .into(),
+            );
         }
 
         if self.bitcoind.mode == ServiceMode::External && self.bitcoind.host.is_none() {
@@ -296,8 +306,10 @@ const DEFAULT_STACK_TOML: &str = r#"# stacks stack config — the single source 
 network = "testnet" # mainnet | testnet | mocknet
 
 [bitcoind]
-mode = "enabled"
-# version = "27.1"
+# Only needed on mainnet. Testnet (krypton) follows the Hiro-hosted bitcoin
+# regtest; mocknet simulates the burnchain.
+mode = "disabled"
+# version = "29"
 # For mode = "external":
 # host = "10.0.1.5"
 # rpc_port = 18332
