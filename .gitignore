@@ -6,3 +6,4 @@
 !sample.env
 stacks.toml
 /.export-tmp
+.DS_Store

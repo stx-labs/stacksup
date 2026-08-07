@@ -91,49 +91,68 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The node's canonical view, read from the sortition DB on disk. The latest
-/// pox-valid snapshot row carries both the burnchain height and the canonical
-/// stacks tip height. Read-only open is safe while the node is running.
+/// The node's canonical view, read from its on-disk sqlite DBs (read-only
+/// opens are safe while the node runs).
+///
+/// Bitcoin height: latest pox-valid snapshot in the sortition DB. Stacks
+/// height: MAX over the chainstate headers DB (nakamoto_block_headers +
+/// epoch2 block_headers) — NOT the sortition snapshot's
+/// canonical_stacks_tip_height, which only advances per *burn* block and so
+/// lags by up to a tenure's worth of stacks blocks post-Nakamoto.
 fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
     let mode = match stack.network {
         Network::Mainnet => "mainnet",
         Network::Testnet => "krypton",
         Network::Mocknet => "mocknet",
     };
-    let db = data_dir
-        .join("chainstate/stacks-node")
-        .join(mode)
-        .join("burnchain/sortition/marf.sqlite");
+    let node_dir = data_dir.join("chainstate/stacks-node").join(mode);
+    let sort_db = node_dir.join("burnchain/sortition/marf.sqlite");
+    let headers_db = node_dir.join("chainstate/vm/index.sqlite");
     let mut tip = Tip {
         service: "stacks-node",
-        source: "sortition db (on disk)".into(),
+        source: "node chainstate dbs (on disk)".into(),
         stacks: None,
         bitcoin: None,
         note: None,
     };
-    if !db.exists() {
-        tip.note = Some(format!("no sortition db at {} — has the node run yet?", db.display()));
+    if !sort_db.exists() {
+        tip.note = Some(format!("no sortition db at {} — has the node run yet?", sort_db.display()));
         return tip;
     }
-    let query = || -> Result<(u64, u64)> {
-        let conn = rusqlite::Connection::open_with_flags(
-            &db,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
-        let (btc, stx) = conn.query_row(
-            "SELECT block_height, canonical_stacks_tip_height FROM snapshots \
-             WHERE pox_valid = 1 ORDER BY block_height DESC LIMIT 1",
-            [],
-            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
-        )?;
-        Ok((btc, stx))
+
+    let open = |db: &Path| {
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     };
-    match query() {
-        Ok((btc, stx)) => {
-            tip.bitcoin = Some(btc);
-            tip.stacks = Some(stx);
-        }
+
+    match open(&sort_db).and_then(|conn| {
+        conn.query_row(
+            "SELECT block_height FROM snapshots WHERE pox_valid = 1 \
+             ORDER BY block_height DESC LIMIT 1",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+    }) {
+        Ok(btc) => tip.bitcoin = Some(btc),
         Err(e) => tip.note = Some(format!("could not read sortition db ({e})")),
+    }
+
+    if headers_db.exists() {
+        match open(&headers_db).and_then(|conn| {
+            conn.query_row(
+                "SELECT MAX(h) FROM (\
+                   SELECT MAX(block_height) AS h FROM nakamoto_block_headers \
+                   UNION ALL \
+                   SELECT MAX(block_height) AS h FROM block_headers)",
+                [],
+                |row| row.get::<_, Option<u64>>(0),
+            )
+        }) {
+            Ok(Some(stx)) => tip.stacks = Some(stx),
+            Ok(None) => tip.note = Some("headers db has no blocks yet".into()),
+            Err(e) => tip.note = Some(format!("could not read headers db ({e})")),
+        }
+    } else {
+        tip.note = Some(format!("no headers db at {}", headers_db.display()));
     }
     tip
 }
