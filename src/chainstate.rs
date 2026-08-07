@@ -122,7 +122,6 @@ fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
     let mode = match stack.network {
         Network::Mainnet => "mainnet",
         Network::Testnet => "krypton",
-        Network::Mocknet => "mocknet",
     };
     let node_dir = data_dir.join("chainstate/stacks-node").join(mode);
     let sort_db = node_dir.join("burnchain/sortition/marf.sqlite");

@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 pub enum Network {
     Mainnet,
     Testnet,
-    Mocknet,
 }
 
 impl fmt::Display for Network {
@@ -26,7 +25,6 @@ impl fmt::Display for Network {
         match self {
             Network::Mainnet => write!(f, "mainnet"),
             Network::Testnet => write!(f, "testnet"),
-            Network::Mocknet => write!(f, "mocknet"),
         }
     }
 }
@@ -155,14 +153,8 @@ impl Stack {
     pub fn validate(&self) -> (Vec<String>, Vec<String>) {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        let mocknet = self.network == Network::Mocknet;
-
-        if mocknet && self.bitcoind.mode != ServiceMode::Disabled {
-            errors
-                .push("mocknet simulates the burnchain; set [bitcoind] mode = \"disabled\"".into());
-        }
         // Only a mainnet node needs its own bitcoind: krypton testnet follows
-        // the Hiro-hosted bitcoin regtest, and mocknet simulates the burnchain.
+        // the Hiro-hosted bitcoin regtest.
         if self.network == Network::Mainnet
             && self.stacks_node.mode == ServiceMode::Enabled
             && self.bitcoind.mode == ServiceMode::Disabled
@@ -303,7 +295,7 @@ pub fn init(force: bool) -> Result<()> {
     Ok(())
 }
 
-const DEFAULT_STACK_TOML: &str = r#"# stacks stack config — the single source of truth.
+const DEFAULT_STACK_TOML: &str = r#"# stacksup config
 # Everything under rendered/ is generated from this file; edit here, not there.
 #
 # Every service has a `mode`:
@@ -314,11 +306,11 @@ const DEFAULT_STACK_TOML: &str = r#"# stacks stack config — the single source 
 # Managed services also take a `version` — the docker image tag to run.
 # Omit it to use this tool's pinned default.
 
-network = "testnet" # mainnet | testnet | mocknet
+network = "testnet" # mainnet | testnet
 
 [bitcoind]
 # Only needed on mainnet. Testnet (krypton) follows the Hiro-hosted bitcoin
-# regtest; mocknet simulates the burnchain.
+# regtest.
 mode = "disabled"
 # version = "29"
 # For mode = "external":

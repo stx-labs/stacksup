@@ -479,7 +479,6 @@ fn node_config_toml(stack: &Stack) -> String {
     let (burn_mode, chain) = match stack.network {
         Network::Mainnet => ("mainnet", "bitcoin"),
         Network::Testnet => ("krypton", "bitcoin"),
-        Network::Mocknet => ("mocknet", "bitcoin"),
     };
 
     out.push_str("[node]\n");

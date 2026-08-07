@@ -60,7 +60,6 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     let network = match stack.network {
         Network::Mainnet => "mainnet",
         Network::Testnet => "testnet",
-        Network::Mocknet => bail!("mocknet has no archives — it starts from genesis in minutes"),
     };
 
     if let Some(running) = crate::docker::running_services(data_dir) {
@@ -790,7 +789,6 @@ fn restore_node(archive: &Path, stack: &Stack, data_dir: &Path) -> Result<()> {
     let mode = match stack.network {
         Network::Mainnet => "mainnet",
         Network::Testnet => "krypton",
-        Network::Mocknet => unreachable!(),
     };
     let target_root = data_dir.join("chainstate/stacks-node");
     let tmp = data_dir.join("chainstate/.restore-tmp");
