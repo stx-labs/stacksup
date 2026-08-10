@@ -185,17 +185,44 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Config {
-            command: ConfigCommand::Init { force },
-        } => config::init(force),
-        Command::Config {
-            command: ConfigCommand::Render,
-        } => {
-            let stack = config::load(&cli.config)?;
-            let dir = render::render(&stack, &cli.data_dir)?;
-            println!("Rendered service configs to {}/", dir.display());
-            Ok(())
-        }
+        Command::Config { command } => match command {
+            ConfigCommand::Init { force } => config::init(force),
+            ConfigCommand::Render => {
+                let stack = config::load(&cli.config)?;
+                let dir = render::render(&stack, &cli.data_dir)?;
+                println!("Rendered service configs to {}/", dir.display());
+                Ok(())
+            }
+            ConfigCommand::Check => {
+                let stack = config::load(&cli.config)?;
+                doctor::run(&stack)
+            }
+        },
+        Command::Logs { service, command } => match command {
+            Some(LogsCommand::Export {
+                service,
+                since,
+                logs_only,
+                out,
+            }) => {
+                let stack = config::load(&cli.config)?;
+                export::run(
+                    &stack,
+                    &cli.config,
+                    &cli.data_dir,
+                    export::Opts {
+                        service,
+                        since,
+                        logs_only,
+                        out,
+                    },
+                )
+            }
+            None => {
+                let stack = config::load(&cli.config)?;
+                docker::logs(&stack, &cli.data_dir, service.as_deref())
+            }
+        },
         Command::Start { service, no_render } => {
             let stack = config::load(&cli.config)?;
             if !no_render {
@@ -227,89 +254,48 @@ fn run() -> Result<()> {
             let stack = config::load(&cli.config)?;
             docker::status(&stack, &cli.data_dir)
         }
-        Command::Logs {
-            service,
-            command: None,
-        } => {
-            let stack = config::load(&cli.config)?;
-            docker::logs(&stack, &cli.data_dir, service.as_deref())
-        }
-        Command::Logs {
-            command:
-                Some(LogsCommand::Export {
-                    service,
-                    since,
-                    logs_only,
-                    out,
-                }),
-            ..
-        } => {
-            let stack = config::load(&cli.config)?;
-            export::run(
-                &stack,
-                &cli.config,
-                &cli.data_dir,
-                export::Opts {
-                    service,
-                    since,
-                    logs_only,
-                    out,
-                },
-            )
-        }
-        Command::Config {
-            command: ConfigCommand::Check,
-        } => {
-            let stack = config::load(&cli.config)?;
-            doctor::run(&stack)
-        }
-        // Deliberately does not load stacks.toml: wiping state must work even
-        // when the config is broken or gone.
-        Command::Chainstate {
-            command: ChainstateCommand::Wipe { service, yes },
-        } => chainstate::wipe(&cli.data_dir, service.as_deref(), yes),
-        Command::Chainstate {
-            command: ChainstateCommand::Status,
-        } => {
-            let stack = config::load(&cli.config)?;
-            chainstate::status(&stack, &cli.data_dir)
-        }
-        Command::Chainstate {
-            command:
-                ChainstateCommand::Download {
-                    service,
-                    archive,
-                    check_only,
-                    yes,
-                    no_verify,
-                    skip_version_check,
-                    keep_archives,
-                },
-        } => {
-            let service = match service {
-                ServiceArg::Node => download::ServiceSel::Node,
-                ServiceArg::Api => download::ServiceSel::Api,
-                ServiceArg::All => download::ServiceSel::All,
-            };
-            if archive.is_some() && matches!(service, download::ServiceSel::All) {
-                anyhow::bail!(
-                    "--archive requires exactly one service: --service node or --service api"
-                );
+        Command::Chainstate { command } => match command {
+            ChainstateCommand::Wipe { service, yes } => {
+                chainstate::wipe(&cli.data_dir, service.as_deref(), yes)
             }
-            let stack = config::load(&cli.config)?;
-            download::run(
-                &stack,
-                &cli.data_dir,
-                download::Opts {
-                    service,
-                    archive,
-                    check_only,
-                    yes,
-                    no_verify,
-                    skip_version_check,
-                    keep_archives,
-                },
-            )
-        }
+            ChainstateCommand::Status => {
+                let stack = config::load(&cli.config)?;
+                chainstate::status(&stack, &cli.data_dir)
+            }
+            ChainstateCommand::Download {
+                service,
+                archive,
+                check_only,
+                yes,
+                no_verify,
+                skip_version_check,
+                keep_archives,
+            } => {
+                let service = match service {
+                    ServiceArg::Node => download::ServiceSel::Node,
+                    ServiceArg::Api => download::ServiceSel::Api,
+                    ServiceArg::All => download::ServiceSel::All,
+                };
+                if archive.is_some() && matches!(service, download::ServiceSel::All) {
+                    anyhow::bail!(
+                        "--archive requires exactly one service: --service node or --service api"
+                    );
+                }
+                let stack = config::load(&cli.config)?;
+                download::run(
+                    &stack,
+                    &cli.data_dir,
+                    download::Opts {
+                        service,
+                        archive,
+                        check_only,
+                        yes,
+                        no_verify,
+                        skip_version_check,
+                        keep_archives,
+                    },
+                )
+            }
+        },
     }
 }
