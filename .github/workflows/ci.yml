@@ -32,3 +32,22 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup component add clippy
+          rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Warnings are errors in CI so lints can't accumulate silently.
+      - name: Run clippy
+        run: cargo clippy --all-targets --locked -- -D warnings

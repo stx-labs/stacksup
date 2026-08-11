@@ -175,10 +175,10 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
     std::fs::write(compose_file(data_dir), format!("{GENERATED_HEADER}{yaml}"))?;
 
     // Reversed (push) edges we can't wire ourselves: emit the node-side config.
-    if stack.stacks_node.mode == ServiceMode::External {
-        if let Some(snippet) = apply_to_your_node(stack) {
-            std::fs::write(dir.join("apply-to-your-node.toml"), snippet)?;
-        }
+    if stack.stacks_node.mode == ServiceMode::External
+        && let Some(snippet) = apply_to_your_node(stack)
+    {
+        std::fs::write(dir.join("apply-to-your-node.toml"), snippet)?;
     }
 
     Ok(dir)
@@ -548,14 +548,13 @@ fn node_config_toml(stack: &Stack) -> String {
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"stacks-api:{API_EVENT_PORT}\"\nevents_keys = {API_EVENTS_KEYS}\ntimeout_ms = 300_000\n\n"
         ));
-    } else if stack.stacks_api.mode == ServiceMode::External {
-        if let (Some(host), Some(port)) =
+    } else if stack.stacks_api.mode == ServiceMode::External
+        && let (Some(host), Some(port)) =
             (&stack.stacks_api.event_host, stack.stacks_api.event_port)
-        {
-            out.push_str(&format!(
+    {
+        out.push_str(&format!(
                 "[[events_observer]]\nendpoint = \"{host}:{port}\"\nevents_keys = {API_EVENTS_KEYS}\ntimeout_ms = 300_000\n\n"
             ));
-        }
     }
 
     if stack.stacks_signer.mode == ServiceMode::Enabled {
@@ -596,10 +595,10 @@ stacks_private_key = "REPLACE_ME"
 /// (`[stacks-node] auth_token`); managed nodes use a tool-managed one.
 // TODO(hackathon): generate per-stack random token into a gitignored secrets file.
 fn node_auth_token(stack: &Stack) -> String {
-    if stack.stacks_node.mode == ServiceMode::External {
-        if let Some(token) = &stack.stacks_node.auth_token {
-            return token.clone();
-        }
+    if stack.stacks_node.mode == ServiceMode::External
+        && let Some(token) = &stack.stacks_node.auth_token
+    {
+        return token.clone();
     }
     "stacks-tool-dev-auth-token".into()
 }

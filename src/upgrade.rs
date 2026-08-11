@@ -115,9 +115,9 @@ pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
         rows.iter()
             .find(|r| r.name == "stacks-signer")
             .and_then(|r| r.current.clone()),
-    ) {
-        if node != signer {
-            println!(
+    ) && node != signer
+    {
+        println!(
                 "\n{}",
                 format!(
                     "⚠ stacks-node ({}) and stacks-signer ({}) versions differ — they should be upgraded together",
@@ -126,7 +126,6 @@ pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
                 )
                 .yellow()
             );
-        }
     }
 
     if upgrades == 0 {
