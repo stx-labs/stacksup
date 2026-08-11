@@ -475,7 +475,11 @@ fn pg_verdict(job: &Job, deployment: &Deployment, version_problem: &mut bool) {
         .map(|n| n.to_string_lossy().to_string())
         .and_then(|n| parse_pg_major_from_name(&n));
     let pg_image = crate::utils::services::postgres_image(deployment);
-    match classify_version(archive_pg.as_deref(), &image_tag(&pg_image), || {
+    // Distro-suffixed tags ("16.5-alpine") must still gate: strip the suffix
+    // so the numeric prefix classifies, instead of falling through to the
+    // pulled-image label (which official postgres images don't carry).
+    let pg_tag = image_tag(&pg_image);
+    match classify_version(archive_pg.as_deref(), strip_tag_suffix(&pg_tag), || {
         pulled_image_version(&pg_image)
     }) {
         VersionVerdict::Ok(a, c) => {
@@ -1176,6 +1180,15 @@ mod tests {
         assert!(matches!(v, VersionVerdict::Ok(..)));
         // `latest` falls back to the pulled image
         let v = classify_version(Some(&[9, 0, 2]), "latest", || Some(vec![9, 0, 2]));
+        assert!(matches!(v, VersionVerdict::Ok(..)));
+    }
+
+    #[test]
+    fn suffixed_postgres_tags_still_gate() {
+        // "16.5-alpine" must block a pg-17 dump, not fall through to Unknown
+        let v = classify_version(Some(&[17]), strip_tag_suffix("16.5-alpine"), || None);
+        assert!(matches!(v, VersionVerdict::TooNew(..)));
+        let v = classify_version(Some(&[17]), strip_tag_suffix("17.2-alpine"), || None);
         assert!(matches!(v, VersionVerdict::Ok(..)));
     }
 
