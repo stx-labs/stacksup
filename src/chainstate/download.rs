@@ -62,13 +62,13 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
         Network::Testnet => "testnet",
     };
 
-    if let Some(running) = crate::utils::docker::running_services(data_dir) {
-        if !running.is_empty() {
-            bail!(
-                "the stack is running ({}) — run `stacksup stop` first",
-                running.join(", ")
-            );
-        }
+    if let Some(running) = crate::utils::docker::running_services(data_dir)
+        && !running.is_empty()
+    {
+        bail!(
+            "the stack is running ({}) — run `stacksup stop` first",
+            running.join(", ")
+        );
     }
 
     let downloads_dir = data_dir.join("downloads");
@@ -353,10 +353,10 @@ fn extract_hrefs(html: &str) -> Vec<String> {
         rest = &rest[start + 6..];
         if let Some(end) = rest.find('"') {
             let target = &rest[..end];
-            if let Some(name) = target.rsplit('/').next() {
-                if !name.is_empty() {
-                    out.push(name.to_string());
-                }
+            if let Some(name) = target.rsplit('/').next()
+                && !name.is_empty()
+            {
+                out.push(name.to_string());
             }
             rest = &rest[end..];
         } else {
@@ -748,12 +748,11 @@ fn fetch_expected_sha256(job: &Job) -> Option<String> {
         }
     };
     for url in candidates {
-        if let Ok(resp) = ureq::get(&url).call() {
-            if let Ok(body) = resp.into_string() {
-                if let Some(hash) = parse_sha_line(&body) {
-                    return Some(hash);
-                }
-            }
+        if let Ok(resp) = ureq::get(&url).call()
+            && let Ok(body) = resp.into_string()
+            && let Some(hash) = parse_sha_line(&body)
+        {
+            return Some(hash);
         }
     }
     None
