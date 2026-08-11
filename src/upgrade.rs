@@ -17,6 +17,10 @@ struct Row {
     name: &'static str,
     current: Option<Vec<u64>>,
     current_note: &'static str,
+    /// The tag is pinned inside the `image` override — upgrade guidance must
+    /// say "update the image tag", not "set version" (validation rejects
+    /// `version` alongside a tagged `image`).
+    tag_from_image: bool,
     /// Tag pins only a major (e.g. postgres `17`): minors float with pulls,
     /// so only a new major is a real suggestion.
     major_pin: bool,
@@ -26,40 +30,70 @@ struct Row {
 }
 
 pub fn run(deployment: &Deployment, service: Option<&str>) -> Result<()> {
-    let targets: Vec<(&'static str, ServiceMode, String)> = [
+    let targets: Vec<(&'static str, ServiceMode, String, bool)> = [
         (
             "bitcoind",
             deployment.bitcoind.mode,
             crate::utils::services::bitcoind_image(deployment),
+            deployment
+                .bitcoind
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-node",
             deployment.stacks_node.mode,
             crate::utils::services::stacks_node_image(deployment),
+            deployment
+                .stacks_node
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-signer",
             deployment.stacks_signer.mode,
             crate::utils::services::stacks_signer_image(deployment),
+            deployment
+                .stacks_signer
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-api",
             deployment.stacks_api.mode,
             crate::utils::services::stacks_api_image(deployment),
+            deployment
+                .stacks_api
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-mesh-api",
             deployment.stacks_mesh_api.mode,
             crate::utils::services::stacks_mesh_api_image(deployment),
+            deployment
+                .stacks_mesh_api
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "postgres",
             deployment.postgres.mode,
             crate::utils::services::postgres_image(deployment),
+            deployment
+                .postgres
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
     ]
     .into_iter()
-    .filter(|(n, m, _)| *m == ServiceMode::Enabled && service.is_none_or(|s| s == *n))
+    .filter(|(n, m, _, _)| *m == ServiceMode::Enabled && service.is_none_or(|s| s == *n))
     .collect();
 
     if targets.is_empty() {
@@ -72,8 +106,8 @@ pub fn run(deployment: &Deployment, service: Option<&str>) -> Result<()> {
     println!("Checking registries for newer image versions...\n");
 
     let mut rows = Vec::new();
-    for (name, _, image) in &targets {
-        rows.push(check_service(name, image));
+    for (name, _, image, tag_from_image) in &targets {
+        rows.push(check_service(name, image, *tag_from_image));
     }
 
     // Table
@@ -210,15 +244,24 @@ fn guidance(row: &Row) -> Option<String> {
     if minor.is_none() && major.is_none() {
         return None;
     }
+    // Where the new tag goes: `version`, unless the tag is pinned inside the
+    // `image` override (validation rejects `version` in that case).
+    let set_tag = |name: &str, ver: &str| {
+        if row.tag_from_image {
+            format!("update the tag in [{name}] `image` to \"{ver}\"")
+        } else {
+            format!("set [{name}] version = \"{ver}\"")
+        }
+    };
     let mut out = String::new();
     match row.name {
         "stacks-api" => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  stacks-api {}: same-major — DB-compatible. Set [stacks-api] version = \"{}\", \
+                    "  stacks-api {}: same-major — DB-compatible. {}, \
                      then `stacksup pull && stacksup stop && stacksup start`.\n",
                     version_string(m),
-                    version_string(m)
+                    set_tag("stacks-api", &version_string(m)),
                 ));
             }
             if let Some(mj) = major {
@@ -227,10 +270,11 @@ fn guidance(row: &Row) -> Option<String> {
                         "  stacks-api {mj}: MAJOR — DB-BREAKING. The new API cannot migrate the old database:\n\
                              1. `stacksup stop`\n\
                              2. `stacksup chainstate wipe postgres` (API data only)\n\
-                             3. set [stacks-api] version = \"{mj}\" and `stacksup pull`\n\
+                             3. {set_step} and `stacksup pull`\n\
                              4. `stacksup chainstate download --service api` (archive matching the new major)\n\
                              5. `stacksup start`",
-                        mj = version_string(mj)
+                        mj = version_string(mj),
+                        set_step = set_tag("stacks-api", &version_string(mj)),
                     )
                     .red()
                     .to_string(),
@@ -240,9 +284,9 @@ fn guidance(row: &Row) -> Option<String> {
         "postgres" => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  postgres {}: patch/minor — safe. Set [postgres] version = \"{}\", then pull + restart.\n",
+                    "  postgres {}: patch/minor — safe. {}, then pull + restart.\n",
                     version_string(m),
-                    version_string(m)
+                    set_tag("postgres", &version_string(m)),
                 ));
             }
             if let Some(mj) = major {
@@ -256,18 +300,18 @@ fn guidance(row: &Row) -> Option<String> {
         "stacks-node" | "stacks-signer" => {
             let v = minor.or(major)?;
             out.push_str(&format!(
-                "  {}: set version = \"{}\" (upgrade stacks-node and stacks-signer together), \
+                "  {}: {} (upgrade stacks-node and stacks-signer together), \
                  then `stacksup pull && stacksup stop && stacksup start`. Chainstate migrates forward automatically.",
                 row.name,
-                version_string(v)
+                set_tag(row.name, &version_string(v)),
             ));
         }
         _ => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  {}: set version = \"{}\", then `stacksup pull && stacksup stop && stacksup start`.\n",
+                    "  {}: {}, then `stacksup pull && stacksup stop && stacksup start`.\n",
                     row.name,
-                    version_string(m)
+                    set_tag(row.name, &version_string(m)),
                 ));
             }
             if let Some(mj) = major {
@@ -282,7 +326,7 @@ fn guidance(row: &Row) -> Option<String> {
     Some(out.trim_end().to_string())
 }
 
-fn check_service(name: &'static str, image: &str) -> Row {
+fn check_service(name: &'static str, image: &str, tag_from_image: bool) -> Row {
     let repo = image.rsplit_once(':').map(|(r, _)| r).unwrap_or(image);
     let tag = image_tag(image);
 
@@ -301,6 +345,7 @@ fn check_service(name: &'static str, image: &str) -> Row {
         name,
         current,
         current_note,
+        tag_from_image,
         major_pin,
         same_major: None,
         next_major: None,
@@ -342,18 +387,29 @@ fn registry_versions(repo: &str) -> Result<Vec<Vec<u64>>> {
     let tags = if let Some(path) = repo.strip_prefix("ghcr.io/") {
         ghcr_tags(path)?
     } else {
-        let path = if repo.contains('/') {
-            repo.to_string()
-        } else {
-            format!("library/{repo}")
-        };
-        dockerhub_tags(&path)?
+        dockerhub_tags(&dockerhub_path(repo))?
     };
     Ok(tags
         .iter()
         .filter_map(|t| parse_version(t))
         .filter(|v| v.len() >= 2)
         .collect())
+}
+
+/// Docker Hub API path for a repository: strips the canonical Hub host
+/// prefixes (`docker.io/`, `index.docker.io/`, `registry-1.docker.io/`) and
+/// qualifies official images under `library/`.
+fn dockerhub_path(repo: &str) -> String {
+    let repo = repo
+        .strip_prefix("docker.io/")
+        .or_else(|| repo.strip_prefix("index.docker.io/"))
+        .or_else(|| repo.strip_prefix("registry-1.docker.io/"))
+        .unwrap_or(repo);
+    if repo.contains('/') {
+        repo.to_string()
+    } else {
+        format!("library/{repo}")
+    }
 }
 
 fn dockerhub_tags(path: &str) -> Result<Vec<String>> {
@@ -417,6 +473,7 @@ mod tests {
             name: "stacks-api",
             current,
             current_note: "",
+            tag_from_image: false,
             major_pin,
             same_major: same,
             next_major: next,
@@ -472,6 +529,29 @@ mod tests {
         assert!(text.contains("DB-BREAKING"));
         assert!(text.contains("stacksup chainstate wipe postgres"));
         assert!(text.contains("chainstate download --service api"));
+    }
+
+    #[test]
+    fn guidance_targets_image_when_tag_pinned_there() {
+        let mut r = row(Some(vec![8, 5, 0]), false, Some(vec![8, 15, 4]), None);
+        r.tag_from_image = true;
+        let text = guidance(&r).unwrap();
+        assert!(text.contains("update the tag in [stacks-api] `image`"));
+        assert!(!text.contains("version = "));
+        // and the DB-breaking major path too
+        let mut r = row(Some(vec![8, 5, 0]), false, None, Some(vec![9, 0, 2]));
+        r.tag_from_image = true;
+        let text = guidance(&r).unwrap();
+        assert!(text.contains("update the tag in [stacks-api] `image` to \"9.0.2\""));
+    }
+
+    #[test]
+    fn dockerhub_path_normalizes_hub_hosts() {
+        assert_eq!(dockerhub_path("docker.io/myorg/api"), "myorg/api");
+        assert_eq!(dockerhub_path("index.docker.io/myorg/api"), "myorg/api");
+        assert_eq!(dockerhub_path("docker.io/postgres"), "library/postgres");
+        assert_eq!(dockerhub_path("postgres"), "library/postgres");
+        assert_eq!(dockerhub_path("myorg/api"), "myorg/api");
     }
 
     #[test]

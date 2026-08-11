@@ -10,38 +10,67 @@ const REPO_STACKS_API: (&str, &str) = ("hirosystems/stacks-blockchain-api", "lat
 const REPO_STACKS_MESH_API: (&str, &str) = ("ghcr.io/stx-labs/stacks-mesh-api", "latest");
 const REPO_POSTGRES: (&str, &str) = ("postgres", "latest");
 
-fn image((repo, default_tag): (&str, &str), version: Option<&str>) -> String {
-    format!("{repo}:{}", version.unwrap_or(default_tag))
+fn image(
+    (default_repo, default_tag): (&str, &str),
+    image_override: Option<&str>,
+    version: Option<&str>,
+) -> String {
+    match image_override {
+        // Full ref with its own tag: used verbatim (validation rejects a
+        // conflicting `version`).
+        Some(full) if crate::utils::versions::has_explicit_tag(full) => full.to_string(),
+        // Repository override: tag still comes from `version`/the default.
+        Some(repo) => format!("{repo}:{}", version.unwrap_or(default_tag)),
+        None => format!("{default_repo}:{}", version.unwrap_or(default_tag)),
+    }
 }
 
 pub fn bitcoind_image(deployment: &Deployment) -> String {
-    image(REPO_BITCOIND, deployment.bitcoind.version.as_deref())
+    image(
+        REPO_BITCOIND,
+        deployment.bitcoind.image.as_deref(),
+        deployment.bitcoind.version.as_deref(),
+    )
 }
 
 pub fn stacks_node_image(deployment: &Deployment) -> String {
-    image(REPO_STACKS_NODE, deployment.stacks_node.version.as_deref())
+    image(
+        REPO_STACKS_NODE,
+        deployment.stacks_node.image.as_deref(),
+        deployment.stacks_node.version.as_deref(),
+    )
 }
 
 pub fn stacks_signer_image(deployment: &Deployment) -> String {
     image(
         REPO_STACKS_SIGNER,
+        deployment.stacks_signer.image.as_deref(),
         deployment.stacks_signer.version.as_deref(),
     )
 }
 
 pub fn stacks_api_image(deployment: &Deployment) -> String {
-    image(REPO_STACKS_API, deployment.stacks_api.version.as_deref())
+    image(
+        REPO_STACKS_API,
+        deployment.stacks_api.image.as_deref(),
+        deployment.stacks_api.version.as_deref(),
+    )
 }
 
 pub fn stacks_mesh_api_image(deployment: &Deployment) -> String {
     image(
         REPO_STACKS_MESH_API,
+        deployment.stacks_mesh_api.image.as_deref(),
         deployment.stacks_mesh_api.version.as_deref(),
     )
 }
 
 pub fn postgres_image(deployment: &Deployment) -> String {
-    image(REPO_POSTGRES, deployment.postgres.version.as_deref())
+    image(
+        REPO_POSTGRES,
+        deployment.postgres.image.as_deref(),
+        deployment.postgres.version.as_deref(),
+    )
 }
 
 pub const NODE_RPC_PORT: u16 = 20443;
@@ -127,6 +156,25 @@ mod tests {
         let s = deployment("network = \"testnet\"");
         assert!(stacks_node_image(&s).ends_with(":latest"));
         assert!(postgres_image(&s).starts_with("postgres:"));
+    }
+
+    #[test]
+    fn image_override_resolution() {
+        // repo-only override + version -> override repo with version tag
+        let d =
+            deployment("network = \"testnet\"\n[postgres]\nimage = \"myorg/pg\"\nversion = \"17\"");
+        assert_eq!(postgres_image(&d), "myorg/pg:17");
+        // repo-only override without version -> default tag
+        let d = deployment("network = \"testnet\"\n[postgres]\nimage = \"myorg/pg\"");
+        assert!(postgres_image(&d).starts_with("myorg/pg:"));
+        // full ref -> verbatim, incl. private registries with ports
+        let d = deployment(
+            "network = \"testnet\"\n[stacks-node]\nimage = \"localhost:5000/core:4.0.1\"",
+        );
+        assert_eq!(stacks_node_image(&d), "localhost:5000/core:4.0.1");
+        // no override -> defaults unchanged
+        let d = deployment("network = \"testnet\"");
+        assert!(!stacks_node_image(&d).starts_with("myorg"));
     }
 
     #[test]

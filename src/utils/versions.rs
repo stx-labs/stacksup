@@ -25,6 +25,12 @@ pub fn version_string(v: &[u64]) -> String {
     v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
 }
 
+/// Whether an image ref carries an explicit tag. A colon whose right side
+/// contains `/` is a registry port (`localhost:5000/repo`), not a tag.
+pub fn has_explicit_tag(image: &str) -> bool {
+    matches!(image.rsplit_once(':'), Some((_, tag)) if !tag.contains('/'))
+}
+
 /// Tag of an image ref, defaulting to `latest` when untagged. A colon whose
 /// right side contains `/` is a registry port (`localhost:5000/repo`), not a tag.
 pub fn image_tag(image: &str) -> String {
@@ -87,6 +93,14 @@ mod tests {
     fn version_string_round_trips() {
         let v = parse_version("3.1.0.0.8").unwrap();
         assert_eq!(version_string(&v), "3.1.0.0.8");
+    }
+
+    #[test]
+    fn detects_explicit_tags() {
+        assert!(has_explicit_tag("postgres:17"));
+        assert!(has_explicit_tag("localhost:5000/repo:1.2"));
+        assert!(!has_explicit_tag("postgres"));
+        assert!(!has_explicit_tag("localhost:5000/repo"));
     }
 
     #[test]
