@@ -25,6 +25,16 @@ pub fn version_string(v: &[u64]) -> String {
     v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
 }
 
+/// Numeric prefix of a distro-suffixed tag ("16.5-alpine" -> "16.5",
+/// "17-bookworm" -> "17"); tags without a numeric prefix ("latest",
+/// "bookworm") are returned unchanged.
+pub fn strip_tag_suffix(tag: &str) -> &str {
+    match tag.split_once('-') {
+        Some((prefix, _)) if parse_version(prefix).is_some() => prefix,
+        _ => tag,
+    }
+}
+
 /// Whether an image ref carries an explicit tag. A colon whose right side
 /// contains `/` is a registry port (`localhost:5000/repo`), not a tag.
 pub fn has_explicit_tag(image: &str) -> bool {
@@ -93,6 +103,16 @@ mod tests {
     fn version_string_round_trips() {
         let v = parse_version("3.1.0.0.8").unwrap();
         assert_eq!(version_string(&v), "3.1.0.0.8");
+    }
+
+    #[test]
+    fn strips_distro_suffixes() {
+        assert_eq!(strip_tag_suffix("16.5-alpine"), "16.5");
+        assert_eq!(strip_tag_suffix("17-bookworm"), "17");
+        assert_eq!(strip_tag_suffix("17"), "17");
+        assert_eq!(strip_tag_suffix("latest"), "latest");
+        // non-numeric prefixes are not versions; leave untouched
+        assert_eq!(strip_tag_suffix("stacks3.0-0a2c0e2"), "stacks3.0-0a2c0e2");
     }
 
     #[test]
