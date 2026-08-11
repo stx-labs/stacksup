@@ -294,3 +294,16 @@ fn run() -> Result<()> {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// clap's built-in validation of the whole CLI definition: conflicting
+    /// flags, bad defaults, ambiguous subcommands all panic here.
+    #[test]
+    fn cli_definition_is_coherent() {
+        Cli::command().debug_assert();
+    }
+}

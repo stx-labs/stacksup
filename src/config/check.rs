@@ -158,3 +158,25 @@ fn check_node_info(r: &mut Report, stack: &Stack) {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_or_local_follows_mode() {
+        assert_eq!(
+            external_or_local(ServiceMode::Enabled, None),
+            Some("127.0.0.1".into())
+        );
+        assert_eq!(
+            external_or_local(ServiceMode::External, Some("10.0.0.5")),
+            Some("10.0.0.5".into())
+        );
+        assert_eq!(external_or_local(ServiceMode::External, None), None);
+        assert_eq!(
+            external_or_local(ServiceMode::Disabled, Some("ignored")),
+            None
+        );
+    }
+}

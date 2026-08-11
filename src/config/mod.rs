@@ -352,3 +352,113 @@ mode = "enabled"
 # user = "stacks"
 # password = "..."
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack(toml_str: &str) -> Stack {
+        toml::from_str(toml_str).expect("test stack.toml should parse")
+    }
+
+    fn errors(toml_str: &str) -> Vec<String> {
+        stack(toml_str).validate().0
+    }
+
+    fn warnings(toml_str: &str) -> Vec<String> {
+        stack(toml_str).validate().1
+    }
+
+    #[test]
+    fn init_template_is_valid_and_clean() {
+        let s: Stack = toml::from_str(DEFAULT_STACK_TOML).expect("template must parse");
+        let (errors, _) = s.validate();
+        assert!(errors.is_empty(), "template has errors: {errors:?}");
+    }
+
+    #[test]
+    fn mainnet_node_requires_bitcoind() {
+        let e = errors("network = \"mainnet\"\n[stacks-node]\nmode = \"enabled\"");
+        assert!(e.iter().any(|m| m.contains("requires bitcoind")));
+    }
+
+    #[test]
+    fn testnet_rejects_managed_bitcoind() {
+        let e = errors("network = \"testnet\"\n[bitcoind]\nmode = \"enabled\"");
+        assert!(e.iter().any(|m| m.contains("Hiro-hosted bitcoin regtest")));
+    }
+
+    #[test]
+    fn external_services_require_hosts() {
+        let e = errors(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\n[stacks-node]\nmode = \"external\"\n[postgres]\nmode = \"external\"",
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.contains("[bitcoind]") && m.contains("`host`"))
+        );
+        assert!(e.iter().any(|m| m.contains("`rpc_host`")));
+        assert!(
+            e.iter()
+                .any(|m| m.contains("[postgres]") && m.contains("`host`"))
+        );
+    }
+
+    #[test]
+    fn apis_require_node_and_api_requires_postgres() {
+        let e = errors(
+            "network = \"testnet\"\n[stacks-api]\nmode = \"enabled\"\n[stacks-mesh-api]\nmode = \"enabled\"",
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.contains("[stacks-api] requires a stacks-node"))
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.contains("[stacks-mesh-api] requires a stacks-node"))
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.contains("[stacks-api] requires Postgres"))
+        );
+        // the mesh API deliberately does NOT require postgres
+        assert!(
+            !e.iter()
+                .any(|m| m.contains("[stacks-mesh-api] requires Postgres"))
+        );
+    }
+
+    #[test]
+    fn managed_signer_needs_signer_host_role() {
+        let e = errors(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\n[stacks-signer]\nmode = \"enabled\"",
+        );
+        assert!(e.iter().any(|m| m.contains("signer-host")));
+    }
+
+    #[test]
+    fn signer_with_external_node_needs_auth_token() {
+        let base = "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"";
+        let e = errors(base);
+        assert!(e.iter().any(|m| m.contains("auth_token")));
+        // with the token supplied it degrades to a warning, not an error
+        let ok = "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\nauth_token = \"tok-1234\"\n[stacks-signer]\nmode = \"enabled\"";
+        assert!(errors(ok).is_empty());
+        assert!(
+            warnings(ok)
+                .iter()
+                .any(|m| m.contains("apply-to-your-node"))
+        );
+    }
+
+    #[test]
+    fn auth_token_on_managed_node_warns() {
+        let w = warnings(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"\nauth_token = \"x\"",
+        );
+        assert!(
+            w.iter()
+                .any(|m| m.contains("only used when mode = \"external\""))
+        );
+    }
+}

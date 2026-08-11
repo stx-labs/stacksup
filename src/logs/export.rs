@@ -311,6 +311,28 @@ mod tests {
     }
 
     #[test]
+    fn copies_tree_with_redaction() {
+        let src = std::env::temp_dir().join(format!("stacksup-export-src-{}", std::process::id()));
+        let dst = std::env::temp_dir().join(format!("stacksup-export-dst-{}", std::process::id()));
+        for d in [&src, &dst] {
+            let _ = fs::remove_dir_all(d);
+        }
+        fs::create_dir_all(src.join("nested")).unwrap();
+        fs::write(
+            src.join("nested/app.env"),
+            "PG_PASSWORD=hunter2\nPG_HOST=postgres\n",
+        )
+        .unwrap();
+        copy_redacted_tree(&src, &dst, &[]).unwrap();
+        let copied = fs::read_to_string(dst.join("nested/app.env")).unwrap();
+        assert!(copied.contains("PG_PASSWORD= <redacted>"));
+        assert!(copied.contains("PG_HOST=postgres"));
+        for d in [&src, &dst] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
     fn redacts_credential_lines() {
         let secrets = vec![];
         assert!(redact("PG_PASSWORD=hunter2", &secrets).contains("PG_PASSWORD= <redacted>"));

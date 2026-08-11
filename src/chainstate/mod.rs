@@ -374,3 +374,106 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
     println!("Deleted {}", dir.display());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack(toml_str: &str) -> Stack {
+        toml::from_str(toml_str).expect("test stack.toml should parse")
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("stacksup-cs-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Fabricate the two node DBs with known heights.
+    fn write_node_dbs(data_dir: &std::path::Path, sortition_btc: u64, headers_stx: u64) {
+        let node = data_dir.join("chainstate/stacks-node/krypton");
+        std::fs::create_dir_all(node.join("burnchain/sortition")).unwrap();
+        std::fs::create_dir_all(node.join("chainstate/vm")).unwrap();
+        let sort =
+            rusqlite::Connection::open(node.join("burnchain/sortition/marf.sqlite")).unwrap();
+        sort.execute_batch(
+            "CREATE TABLE snapshots(block_height INTEGER, canonical_stacks_tip_height INTEGER, pox_valid INTEGER);",
+        )
+        .unwrap();
+        sort.execute(
+            "INSERT INTO snapshots VALUES (?1, 0, 1)",
+            rusqlite::params![sortition_btc],
+        )
+        .unwrap();
+        let headers = rusqlite::Connection::open(node.join("chainstate/vm/index.sqlite")).unwrap();
+        headers
+            .execute_batch(
+                "CREATE TABLE nakamoto_block_headers(block_height INTEGER);\n\
+                 CREATE TABLE block_headers(block_height INTEGER);",
+            )
+            .unwrap();
+        headers
+            .execute(
+                "INSERT INTO nakamoto_block_headers VALUES (?1)",
+                rusqlite::params![headers_stx],
+            )
+            .unwrap();
+        headers
+            .execute("INSERT INTO block_headers VALUES (726)", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn node_tip_reads_headers_db_not_sortition_snapshot() {
+        let dir = temp_dir("tip");
+        write_node_dbs(&dir, 3026, 10602);
+        let s = stack("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let tip = node_tip(&s, &dir);
+        assert_eq!(tip.bitcoin, Some(3026));
+        // stacks height must come from the headers db (the sortition snapshot
+        // said 0 and lags per burn block post-Nakamoto)
+        assert_eq!(tip.stacks, Some(10602));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn node_tip_without_dbs_reports_note() {
+        let dir = temp_dir("empty");
+        let s = stack("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let tip = node_tip(&s, &dir);
+        assert_eq!(tip.stacks, None);
+        assert!(tip.note.unwrap().contains("has the node run yet"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_rejects_services_without_state() {
+        let dir = temp_dir("wipe-unknown");
+        let err = wipe(&dir, Some("stacks-api"), true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no on-disk chainstate"));
+        assert!(err.contains("postgres")); // the valid list names postgres instead
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_single_service_leaves_the_rest() {
+        let dir = temp_dir("wipe-single");
+        std::fs::create_dir_all(dir.join("chainstate/postgres")).unwrap();
+        std::fs::create_dir_all(dir.join("chainstate/bitcoind")).unwrap();
+        wipe(&dir, Some("postgres"), true).unwrap();
+        assert!(!dir.join("chainstate/postgres").exists());
+        assert!(dir.join("chainstate/bitcoind").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_missing_dir_is_a_noop() {
+        let dir = temp_dir("wipe-noop");
+        assert!(wipe(&dir, None, true).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
