@@ -1,0 +1,15 @@
+# Network definition: Stacks mainnet.
+# Referenced from stacks.toml as `network = "mainnet"`.
+
+name = "mainnet"
+chain_id = 0x00000001
+hiro_archive_path = "mainnet"
+
+[bitcoind]
+allow_managed = true
+chain = "main"
+rpc_port = 8332
+p2p_port = 8333
+
+[node]
+burnchain_mode = "mainnet"

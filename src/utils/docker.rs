@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
 use crate::config::render::{COMPOSE_PROJECT, compose_file};
-use crate::config::{ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 use crate::utils::services::roster;
 
 fn compose(data_dir: &Path) -> Command {
@@ -130,8 +130,8 @@ fn run(mut cmd: Command, what: &str) -> Result<()> {
 }
 
 /// A service name is only startable/stoppable if it's enabled in stacks.toml.
-pub(crate) fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
-    match roster(stack).iter().find(|(n, _)| *n == name) {
+pub(crate) fn ensure_enabled(deployment: &Deployment, name: &str) -> Result<()> {
+    match roster(deployment).iter().find(|(n, _)| *n == name) {
         Some((_, ServiceMode::Enabled)) => Ok(()),
         Some((_, mode)) => bail!(
             "{name} is `{}` in stacks.toml — only enabled services can be started/stopped here",
@@ -141,7 +141,7 @@ pub(crate) fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
             }
         ),
         None => {
-            let enabled: Vec<&str> = roster(stack)
+            let enabled: Vec<&str> = roster(deployment)
                 .into_iter()
                 .filter(|(_, m)| *m == ServiceMode::Enabled)
                 .map(|(n, _)| n)
@@ -154,7 +154,7 @@ pub(crate) fn ensure_enabled(stack: &Stack, name: &str) -> Result<()> {
     }
 }
 
-pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
+pub fn start(deployment: &Deployment, data_dir: &Path, service: Option<&str>) -> Result<()> {
     ensure_docker()?;
     if !compose_file(data_dir).exists() {
         bail!(
@@ -164,7 +164,7 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
     }
 
     if let Some(name) = service {
-        ensure_enabled(stack, name)?;
+        ensure_enabled(deployment, name)?;
         println!("Starting {name} (and its dependencies)...");
         let mut cmd = compose(data_dir);
         cmd.args(["up", "-d", name]);
@@ -175,7 +175,7 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
         return Ok(());
     }
 
-    let managed: Vec<_> = roster(stack)
+    let managed: Vec<_> = roster(deployment)
         .into_iter()
         .filter(|(_, m)| *m == ServiceMode::Enabled)
         .collect();
@@ -186,9 +186,9 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
     println!(
         "Starting {} managed service(s) on {}...",
         managed.len(),
-        stack.network
+        deployment.network
     );
-    for (name, mode) in roster(stack) {
+    for (name, mode) in roster(deployment) {
         if mode == ServiceMode::External {
             println!(
                 "{}",
@@ -205,9 +205,9 @@ pub fn start(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
     Ok(())
 }
 
-pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
+pub fn pull(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     ensure_docker()?;
-    let enabled: Vec<_> = roster(stack)
+    let enabled: Vec<_> = roster(deployment)
         .into_iter()
         .filter(|(_, m)| *m == ServiceMode::Enabled)
         .collect();
@@ -229,11 +229,16 @@ pub fn pull(stack: &Stack, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool) -> Result<()> {
+pub fn stop(
+    deployment: &Deployment,
+    data_dir: &Path,
+    service: Option<&str>,
+    destroy: bool,
+) -> Result<()> {
     ensure_docker()?;
 
     if let Some(name) = service {
-        ensure_enabled(stack, name)?;
+        ensure_enabled(deployment, name)?;
         // Single service: `compose stop` halts just that container, leaving
         // the rest of the stack (and the network) running.
         let mut cmd = compose(data_dir);
@@ -262,7 +267,7 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool
                 .dimmed()
         );
     }
-    for (name, mode) in roster(stack) {
+    for (name, mode) in roster(deployment) {
         if mode == ServiceMode::External {
             println!(
                 "{}",
@@ -276,11 +281,11 @@ pub fn stop(stack: &Stack, data_dir: &Path, service: Option<&str>, destroy: bool
 /// Restart = stop + up. Deliberately not `docker compose restart`, which
 /// reuses the existing container: going through `up` means a re-rendered
 /// config or freshly pulled image takes effect on restart.
-pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
+pub fn restart(deployment: &Deployment, data_dir: &Path, service: Option<&str>) -> Result<()> {
     preflight(data_dir)?;
 
     if let Some(name) = service {
-        ensure_enabled(stack, name)?;
+        ensure_enabled(deployment, name)?;
         println!("Restarting {name}...");
         let mut cmd = compose(data_dir);
         cmd.args(["stop", name]);
@@ -292,7 +297,7 @@ pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<
         return Ok(());
     }
 
-    let enabled: Vec<_> = roster(stack)
+    let enabled: Vec<_> = roster(deployment)
         .into_iter()
         .filter(|(_, m)| *m == ServiceMode::Enabled)
         .collect();
@@ -310,10 +315,10 @@ pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<
     Ok(())
 }
 
-pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
+pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     ensure_docker()?;
-    println!("network: {}\n", stack.network);
-    for (name, mode) in roster(stack) {
+    println!("network: {}\n", deployment.network);
+    for (name, mode) in roster(deployment) {
         match mode {
             ServiceMode::External => println!("  {name}: external"),
             ServiceMode::Disabled => println!("  {name}: disabled"),
@@ -328,7 +333,7 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
     run(cmd, "docker compose ps")
 }
 
-pub fn logs(_stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()> {
+pub fn logs(_stack: &Deployment, data_dir: &Path, service: Option<&str>) -> Result<()> {
     ensure_docker()?;
     let mut cmd = compose(data_dir);
     cmd.args(["logs", "--follow", "--tail", "100"]);
@@ -342,8 +347,8 @@ pub fn logs(_stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
 mod tests {
     use super::*;
 
-    fn stack(toml_str: &str) -> Stack {
-        toml::from_str(toml_str).expect("test stack.toml should parse")
+    fn deployment(toml_str: &str) -> Deployment {
+        crate::config::test_deployment(toml_str)
     }
 
     #[test]
@@ -361,13 +366,13 @@ mod tests {
 
     #[test]
     fn ensure_enabled_accepts_enabled_services() {
-        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        let s = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
         assert!(ensure_enabled(&s, "postgres").is_ok());
     }
 
     #[test]
     fn ensure_enabled_rejects_external_and_disabled() {
-        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"external\"\nhost = \"pg\"");
+        let s = deployment("network = \"testnet\"\n[postgres]\nmode = \"external\"\nhost = \"pg\"");
         let err = ensure_enabled(&s, "postgres").unwrap_err().to_string();
         assert!(err.contains("external"));
         let err = ensure_enabled(&s, "stacks-node").unwrap_err().to_string();
@@ -376,7 +381,7 @@ mod tests {
 
     #[test]
     fn ensure_enabled_unknown_lists_enabled_services() {
-        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        let s = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
         let err = ensure_enabled(&s, "nonsense").unwrap_err().to_string();
         assert!(err.contains("unknown service `nonsense`"));
         assert!(err.contains("postgres"));

@@ -183,14 +183,14 @@ fn run() -> Result<()> {
         Command::Config { command } => match command {
             ConfigCommand::Init { force } => config::init(force),
             ConfigCommand::Render => {
-                let stack = config::load(&cli.config)?;
-                let dir = config::render::render(&stack, &cli.data_dir)?;
+                let deployment = config::load(&cli.config)?;
+                let dir = config::render::render(&deployment, &cli.data_dir)?;
                 println!("Rendered service configs to {}/", dir.display());
                 Ok(())
             }
             ConfigCommand::Check => {
-                let stack = config::load(&cli.config)?;
-                config::check::run(&stack)
+                let deployment = config::load(&cli.config)?;
+                config::check::run(&deployment)
             }
         },
         Command::Logs { service, command } => match command {
@@ -200,9 +200,9 @@ fn run() -> Result<()> {
                 logs_only,
                 out,
             }) => {
-                let stack = config::load(&cli.config)?;
+                let deployment = config::load(&cli.config)?;
                 logs::export::run(
-                    &stack,
+                    &deployment,
                     &cli.config,
                     &cli.data_dir,
                     logs::export::Opts {
@@ -214,48 +214,48 @@ fn run() -> Result<()> {
                 )
             }
             None => {
-                let stack = config::load(&cli.config)?;
-                utils::docker::logs(&stack, &cli.data_dir, service.as_deref())
+                let deployment = config::load(&cli.config)?;
+                utils::docker::logs(&deployment, &cli.data_dir, service.as_deref())
             }
         },
         Command::Start { service, no_render } => {
-            let stack = config::load(&cli.config)?;
+            let deployment = config::load(&cli.config)?;
             if !no_render {
-                config::render::render(&stack, &cli.data_dir)?;
+                config::render::render(&deployment, &cli.data_dir)?;
             }
-            utils::docker::start(&stack, &cli.data_dir, service.as_deref())
+            utils::docker::start(&deployment, &cli.data_dir, service.as_deref())
         }
         Command::Stop { service, destroy } => {
-            let stack = config::load(&cli.config)?;
-            utils::docker::stop(&stack, &cli.data_dir, service.as_deref(), destroy)
+            let deployment = config::load(&cli.config)?;
+            utils::docker::stop(&deployment, &cli.data_dir, service.as_deref(), destroy)
         }
         Command::Restart { service, no_render } => {
-            let stack = config::load(&cli.config)?;
+            let deployment = config::load(&cli.config)?;
             if !no_render {
-                config::render::render(&stack, &cli.data_dir)?;
+                config::render::render(&deployment, &cli.data_dir)?;
             }
-            utils::docker::restart(&stack, &cli.data_dir, service.as_deref())
+            utils::docker::restart(&deployment, &cli.data_dir, service.as_deref())
         }
         Command::Pull => {
-            let stack = config::load(&cli.config)?;
-            config::render::render(&stack, &cli.data_dir)?;
-            utils::docker::pull(&stack, &cli.data_dir)
+            let deployment = config::load(&cli.config)?;
+            config::render::render(&deployment, &cli.data_dir)?;
+            utils::docker::pull(&deployment, &cli.data_dir)
         }
         Command::Upgrade { service } => {
-            let stack = config::load(&cli.config)?;
-            upgrade::run(&stack, service.as_deref())
+            let deployment = config::load(&cli.config)?;
+            upgrade::run(&deployment, service.as_deref())
         }
         Command::Status => {
-            let stack = config::load(&cli.config)?;
-            utils::docker::status(&stack, &cli.data_dir)
+            let deployment = config::load(&cli.config)?;
+            utils::docker::status(&deployment, &cli.data_dir)
         }
         Command::Chainstate { command } => match command {
             ChainstateCommand::Wipe { service, yes } => {
                 chainstate::wipe(&cli.data_dir, service.as_deref(), yes)
             }
             ChainstateCommand::Status => {
-                let stack = config::load(&cli.config)?;
-                chainstate::status(&stack, &cli.data_dir)
+                let deployment = config::load(&cli.config)?;
+                chainstate::status(&deployment, &cli.data_dir)
             }
             ChainstateCommand::Download {
                 service,
@@ -276,9 +276,9 @@ fn run() -> Result<()> {
                         "--archive requires exactly one service: --service node or --service api"
                     );
                 }
-                let stack = config::load(&cli.config)?;
+                let deployment = config::load(&cli.config)?;
                 chainstate::download::run(
-                    &stack,
+                    &deployment,
                     &cli.data_dir,
                     chainstate::download::Opts {
                         service,

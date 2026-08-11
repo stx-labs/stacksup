@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use colored::Colorize;
 
-use crate::config::{ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 use crate::utils::services::*;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -32,7 +32,7 @@ impl Report {
     }
 }
 
-pub fn run(stack: &Stack) -> Result<()> {
+pub fn run(deployment: &Deployment) -> Result<()> {
     let mut r = Report { failures: 0 };
 
     println!("config");
@@ -40,7 +40,7 @@ pub fn run(stack: &Stack) -> Result<()> {
     r.ok("stacks.toml is valid and cross-service invariants hold");
 
     println!("\ndocker");
-    if roster(stack)
+    if roster(deployment)
         .iter()
         .any(|(_, m)| *m == ServiceMode::Enabled)
     {
@@ -62,36 +62,42 @@ pub fn run(stack: &Stack) -> Result<()> {
     check_tcp(
         &mut r,
         "bitcoind rpc",
-        external_or_local(stack.bitcoind.mode, stack.bitcoind.host.as_deref()),
-        stack
-            .bitcoind
-            .rpc_port
-            .unwrap_or(bitcoind_rpc_port(stack.network)),
+        external_or_local(
+            deployment.bitcoind.mode,
+            deployment.bitcoind.host.as_deref(),
+        ),
+        bitcoind_rpc_port(deployment),
     );
     check_tcp(
         &mut r,
         "stacks-node rpc",
         external_or_local(
-            stack.stacks_node.mode,
-            stack.stacks_node.rpc_host.as_deref(),
+            deployment.stacks_node.mode,
+            deployment.stacks_node.rpc_host.as_deref(),
         ),
-        node_rpc_port(stack),
+        node_rpc_port(deployment),
     );
     check_tcp(
         &mut r,
         "postgres",
-        external_or_local(stack.postgres.mode, stack.postgres.host.as_deref()),
-        postgres_port(stack),
+        external_or_local(
+            deployment.postgres.mode,
+            deployment.postgres.host.as_deref(),
+        ),
+        postgres_port(deployment),
     );
     check_tcp(
         &mut r,
         "stacks-api",
-        external_or_local(stack.stacks_api.mode, stack.stacks_api.host.as_deref()),
-        stack.stacks_api.port.unwrap_or(API_PORT),
+        external_or_local(
+            deployment.stacks_api.mode,
+            deployment.stacks_api.host.as_deref(),
+        ),
+        deployment.stacks_api.port.unwrap_or(API_PORT),
     );
 
     println!("\nchain");
-    check_node_info(&mut r, stack);
+    check_node_info(&mut r, deployment);
     // TODO(hackathon): the checks that catch the silent failure modes —
     //  - bitcoind getblockchaininfo: chain matches stacks.toml network
     //  - API /extended chain tip vs node /v2/info tip (event stream actually flowing)
@@ -132,16 +138,16 @@ fn check_tcp(r: &mut Report, label: &str, host: Option<String>, port: u16) {
     }
 }
 
-fn check_node_info(r: &mut Report, stack: &Stack) {
-    let host = match stack.stacks_node.mode {
+fn check_node_info(r: &mut Report, deployment: &Deployment) {
+    let host = match deployment.stacks_node.mode {
         ServiceMode::Enabled => "127.0.0.1".to_string(),
-        ServiceMode::External => match &stack.stacks_node.rpc_host {
+        ServiceMode::External => match &deployment.stacks_node.rpc_host {
             Some(h) => h.clone(),
             None => return r.skip("stacks-node /v2/info: no rpc_host configured"),
         },
         ServiceMode::Disabled => return r.skip("stacks-node /v2/info: node is disabled"),
     };
-    let url = format!("http://{host}:{}/v2/info", node_rpc_port(stack));
+    let url = format!("http://{host}:{}/v2/info", node_rpc_port(deployment));
     match ureq::get(&url).timeout(CONNECT_TIMEOUT).call() {
         Ok(resp) => match resp.into_json::<serde_json::Value>() {
             Ok(info) => {

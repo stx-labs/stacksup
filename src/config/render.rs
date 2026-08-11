@@ -1,11 +1,11 @@
-//! Renders `stacks.toml` into everything the stack actually runs on, laid out
-//! under the `--data-dir`:
+//! Renders `stacks.toml` into everything the stack actually runs on, laid out under the
+//! `--data-dir`:
 //!
 //!   <data-dir>/rendered/   compose file + per-service configs (regenerated)
 //!   <data-dir>/chainstate/ service state: chainstate, Postgres, signer db
 //!
-//! Service state is bind-mounted from `chainstate/` (not named Docker volumes) so
-//! the entire stack — configs and data — lives where the operator said.
+//! Service state is bind-mounted from `chainstate/` (not named Docker volumes) so the entire stack
+//! — configs and data — lives where the operator said.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::config::{Network, ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 use crate::utils::services::*;
 
 pub const COMPOSE_PROJECT: &str = "stacks";
@@ -95,7 +95,7 @@ impl ComposeService {
     }
 }
 
-pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
+pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     let dir = data_dir.join("rendered");
     std::fs::create_dir_all(&dir)?;
 
@@ -110,73 +110,73 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
         Ok(())
     };
 
-    if stack.bitcoind.mode == ServiceMode::Enabled {
+    if deployment.bitcoind.mode == ServiceMode::Enabled {
         chainstate_subdir("bitcoind")?;
         compose
             .services
-            .insert("bitcoind".into(), bitcoind_service(stack));
+            .insert("bitcoind".into(), bitcoind_service(deployment));
     }
 
-    if stack.stacks_node.mode == ServiceMode::Enabled {
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-node")?;
         std::fs::create_dir_all(dir.join("stacks-node"))?;
         std::fs::write(
             dir.join("stacks-node/Config.toml"),
-            format!("{GENERATED_HEADER}{}", node_config_toml(stack)),
+            format!("{GENERATED_HEADER}{}", node_config_toml(deployment)),
         )?;
         compose
             .services
-            .insert("stacks-node".into(), node_service(stack));
+            .insert("stacks-node".into(), node_service(deployment));
     }
 
-    if stack.stacks_signer.mode == ServiceMode::Enabled {
+    if deployment.stacks_signer.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-signer")?;
         std::fs::create_dir_all(dir.join("stacks-signer"))?;
         std::fs::write(
             dir.join("stacks-signer/signer.toml"),
-            format!("{GENERATED_HEADER}{}", signer_config_toml(stack)),
+            format!("{GENERATED_HEADER}{}", signer_config_toml(deployment)),
         )?;
         compose
             .services
-            .insert("stacks-signer".into(), signer_service(stack));
+            .insert("stacks-signer".into(), signer_service(deployment));
     }
 
-    if stack.stacks_api.mode == ServiceMode::Enabled {
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
         std::fs::create_dir_all(dir.join("stacks-api"))?;
         std::fs::write(
             dir.join("stacks-api/.env"),
-            format!("{GENERATED_HEADER}{}", api_env(stack)),
+            format!("{GENERATED_HEADER}{}", api_env(deployment)),
         )?;
         compose
             .services
-            .insert("stacks-api".into(), api_service(stack));
+            .insert("stacks-api".into(), api_service(deployment));
     }
 
-    if stack.stacks_mesh_api.mode == ServiceMode::Enabled {
+    if deployment.stacks_mesh_api.mode == ServiceMode::Enabled {
         std::fs::create_dir_all(dir.join("stacks-mesh-api"))?;
         std::fs::write(
             dir.join("stacks-mesh-api/.env"),
-            format!("{GENERATED_HEADER}{}", mesh_api_env(stack)),
+            format!("{GENERATED_HEADER}{}", mesh_api_env(deployment)),
         )?;
         compose
             .services
-            .insert("stacks-mesh-api".into(), mesh_api_service(stack));
+            .insert("stacks-mesh-api".into(), mesh_api_service(deployment));
     }
 
-    if stack.postgres.mode == ServiceMode::Enabled {
+    if deployment.postgres.mode == ServiceMode::Enabled {
         chainstate_subdir("postgres")?;
         std::fs::create_dir_all(data_dir.join("downloads"))?;
         compose
             .services
-            .insert("postgres".into(), postgres_service(stack));
+            .insert("postgres".into(), postgres_service(deployment));
     }
 
     let yaml = serde_yaml::to_string(&compose)?;
     std::fs::write(compose_file(data_dir), format!("{GENERATED_HEADER}{yaml}"))?;
 
     // Reversed (push) edges we can't wire ourselves: emit the node-side config.
-    if stack.stacks_node.mode == ServiceMode::External
-        && let Some(snippet) = apply_to_your_node(stack)
+    if deployment.stacks_node.mode == ServiceMode::External
+        && let Some(snippet) = apply_to_your_node(deployment)
     {
         std::fs::write(dir.join("apply-to-your-node.toml"), snippet)?;
     }
@@ -184,21 +184,14 @@ pub fn render(stack: &Stack, data_dir: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn bitcoind_service(stack: &Stack) -> ComposeService {
-    let rpc = bitcoind_rpc_port(stack.network);
-    let p2p = bitcoind_p2p_port(stack.network);
-    let mut svc = ComposeService::new("bitcoind", &bitcoind_image(stack));
+fn bitcoind_service(deployment: &Deployment) -> ComposeService {
+    let rpc = bitcoind_rpc_port(deployment);
+    let p2p = bitcoind_p2p_port(deployment);
+    let mut svc = ComposeService::new("bitcoind", &bitcoind_image(deployment));
     svc.command = vec![
         "-server=1".into(),
         "-txindex=0".into(),
-        format!(
-            "-chain={}",
-            if stack.network == Network::Mainnet {
-                "main"
-            } else {
-                "test"
-            }
-        ),
+        format!("-chain={}", deployment.net.bitcoind.chain),
         "-rpcbind=0.0.0.0".into(),
         "-rpcallowip=0.0.0.0/0".into(),
         // TODO(hackathon): generate rpcauth instead of user/pass defaults
@@ -210,8 +203,8 @@ fn bitcoind_service(stack: &Stack) -> ComposeService {
     svc
 }
 
-fn node_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-node", &stacks_node_image(stack));
+fn node_service(deployment: &Deployment) -> ComposeService {
+    let mut svc = ComposeService::new("stacks-node", &stacks_node_image(deployment));
     svc.command = vec![
         "stacks-node".into(),
         "start".into(),
@@ -226,19 +219,19 @@ fn node_service(stack: &Stack) -> ComposeService {
         "./stacks-node/Config.toml:/etc/stacks/Config.toml:ro".into(),
         "../chainstate/stacks-node:/stacks-blockchain".into(),
     ];
-    if stack.bitcoind.mode == ServiceMode::Enabled {
+    if deployment.bitcoind.mode == ServiceMode::Enabled {
         svc.depends_on.push("bitcoind".into());
     }
     // The node pushes events to the API; if the API is down at boot the node
     // retries, but starting after the API avoids stalling block processing.
-    if stack.stacks_api.mode == ServiceMode::Enabled {
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-api".into());
     }
     svc
 }
 
-fn signer_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-signer", &stacks_signer_image(stack));
+fn signer_service(deployment: &Deployment) -> ComposeService {
+    let mut svc = ComposeService::new("stacks-signer", &stacks_signer_image(deployment));
     svc.command = vec![
         "stacks-signer".into(),
         "run".into(),
@@ -249,27 +242,27 @@ fn signer_service(stack: &Stack) -> ComposeService {
         "./stacks-signer/signer.toml:/etc/stacks/signer.toml:ro".into(),
         "../chainstate/stacks-signer:/var/lib/stacks-signer".into(),
     ];
-    if stack.stacks_node.mode == ServiceMode::Enabled {
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
     svc
 }
 
-fn api_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-api", &stacks_api_image(stack));
+fn api_service(deployment: &Deployment) -> ComposeService {
+    let mut svc = ComposeService::new("stacks-api", &stacks_api_image(deployment));
     svc.ports = vec![format!("{API_PORT}:{API_PORT}")];
     svc.env_file = vec!["./stacks-api/.env".into()];
-    if stack.postgres.mode == ServiceMode::Enabled {
+    if deployment.postgres.mode == ServiceMode::Enabled {
         svc.depends_on.push("postgres".into());
     }
     svc
 }
 
-fn mesh_api_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-mesh-api", &stacks_mesh_api_image(stack));
+fn mesh_api_service(deployment: &Deployment) -> ComposeService {
+    let mut svc = ComposeService::new("stacks-mesh-api", &stacks_mesh_api_image(deployment));
     svc.ports = vec![format!("{MESH_API_PORT}:{MESH_API_PORT}")];
     svc.env_file = vec!["./stacks-mesh-api/.env".into()];
-    if stack.stacks_node.mode == ServiceMode::Enabled {
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
     svc
@@ -277,8 +270,8 @@ fn mesh_api_service(stack: &Stack) -> ComposeService {
 
 /// Postgres major from the configured version tag: "17" -> 17,
 /// "17.5-alpine" -> 17, "latest"/absent -> None.
-fn postgres_major(stack: &Stack) -> Option<u32> {
-    stack
+fn postgres_major(deployment: &Deployment) -> Option<u32> {
+    deployment
         .postgres
         .version
         .as_deref()?
@@ -288,13 +281,13 @@ fn postgres_major(stack: &Stack) -> Option<u32> {
         .ok()
 }
 
-fn postgres_service(stack: &Stack) -> ComposeService {
-    let mut svc = ComposeService::new("postgres", &postgres_image(stack));
+fn postgres_service(deployment: &Deployment) -> ComposeService {
+    let mut svc = ComposeService::new("postgres", &postgres_image(deployment));
     svc.ports = vec![format!("{POSTGRES_PORT}:{POSTGRES_PORT}")];
     // TODO(hackathon): generate a password into a .env secret file instead
     svc.environment.insert(
         "POSTGRES_USER".into(),
-        stack
+        deployment
             .postgres
             .user
             .clone()
@@ -302,7 +295,7 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     );
     svc.environment.insert(
         "POSTGRES_PASSWORD".into(),
-        stack
+        deployment
             .postgres
             .password
             .clone()
@@ -314,7 +307,7 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     // require the mount at /var/lib/postgresql (enabling pg_upgrade across
     // majors); images <= 17 use PGDATA=/var/lib/postgresql/data and need the
     // mount there. Unknown majors (e.g. `latest`) get the 18+ convention.
-    let data_target = match postgres_major(stack) {
+    let data_target = match postgres_major(deployment) {
         Some(major) if major <= 17 => "/var/lib/postgresql/data",
         _ => "/var/lib/postgresql",
     };
@@ -332,7 +325,7 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     // as PID 1, so SIGTERM from `stacksup stop` reaches postgres directly and
     // shutdown is clean (a backgrounded postgres under bash would be
     // SIGKILLed after the grace period instead).
-    let user = stack
+    let user = deployment
         .postgres
         .user
         .clone()
@@ -350,230 +343,122 @@ fn postgres_service(stack: &Stack) -> ComposeService {
     svc
 }
 
-/// Testnet (krypton) network parameters, mirroring stacks-core's
-/// sample/conf/testnet-follower-conf.toml. The krypton burnchain is the
-/// Hiro-hosted bitcoin *regtest*, not the public bitcoin testnet.
-const TESTNET_BOOTSTRAP_NODE: &str =
-    "0348af7ce1b224476e8f042727af3f84dcf49a69bb3c9dd2a1afaa783acfffb729@seed.testnet.hiro.so:20444";
-const TESTNET_BURNCHAIN_HOST: &str = "bitcoin.regtest.hiro.so";
-
-const TESTNET_NODE_POX5: &str = r#"pox_5_sbtc_contract = "SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token"
-pox_5_sbtc_registry_contract = "SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-registry"
-pox_5_bond_admin = "ST1V2ASRWGR81W7GBN1Z4W2JQKXJWCADPVZG30X45"
-"#;
-
-const TESTNET_USTX_BALANCES: &str = r#"[[ustx_balance]]
-address = "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2"
-amount = 10000000000000000
-
-[[ustx_balance]]
-address = "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF"
-amount = 10000000000000000
-
-[[ustx_balance]]
-address = "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H"
-amount = 10000000000000000
-
-[[ustx_balance]]
-address = "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
-amount = 10000000000000000
-
-[[ustx_balance]]
-address = "ST31XHNM0GZ2K978FPP4QA3STNQ73Z8C9G9MJEPK2"
-amount = 10000000000000000
-
-[[ustx_balance]]
-address = "ST1B38CGQRPXEMRH7B66VXTS22DQTNMSW4YJJ7QK1"
-amount = 10000000000000000
-
-[[ustx_balance]]
-address = "STDMN71Z0H9EF8CRKAWTGBB5YS0BNV26HZ79QFFP"
-amount = 1000000000000000
-
-[[ustx_balance]]
-address = "ST1E0PSCH72JMQH9QCH293ZTEEH7BPA40Y3F39XQ"
-amount = 10000000000000
-
-[[ustx_balance]]
-address = "ST3QBTK0Q438YVNX8EG6Z85HN0WKQPXYT25H5SPPK"
-amount = 10000000000000
-
-[[ustx_balance]]
-address = "ST10BX04F9PC6N1WBXKW3H7CG0NS0A3PK650T3P3R"
-amount = 10000000000000
-
-[[ustx_balance]]
-address = "ST3AF1BBQAFSFCM8K4ZBR1FBXP3P8J1CKGSGDHWR5"
-amount = 100000000000000
-
-[[ustx_balance]]
-address = "STHY13V44422NAN6D3NSJPY9CDR3ED1M6HH9WZ6Y"
-amount = 10000000000000
-"#;
-
-const TESTNET_EPOCHS: &str = r#"[[burnchain.epochs]]
-epoch_name = "1.0"
-start_height = 0
-
-[[burnchain.epochs]]
-epoch_name = "2.0"
-start_height = 0
-
-[[burnchain.epochs]]
-epoch_name = "2.05"
-start_height = 1
-
-[[burnchain.epochs]]
-epoch_name = "2.1"
-start_height = 2
-
-[[burnchain.epochs]]
-epoch_name = "2.2"
-start_height = 3
-
-[[burnchain.epochs]]
-epoch_name = "2.3"
-start_height = 4
-
-[[burnchain.epochs]]
-epoch_name = "2.4"
-start_height = 5
-
-[[burnchain.epochs]]
-epoch_name = "2.5"
-start_height = 6
-
-[[burnchain.epochs]]
-epoch_name = "3.0"
-start_height = 1802
-
-[[burnchain.epochs]]
-epoch_name = "3.1"
-start_height = 1803
-
-[[burnchain.epochs]]
-epoch_name = "3.2"
-start_height = 1804
-
-[[burnchain.epochs]]
-epoch_name = "3.3"
-start_height = 1805
-
-[[burnchain.epochs]]
-epoch_name = "3.4"
-start_height = 1806
-
-[[burnchain.epochs]]
-epoch_name = "4.0"
-start_height = 2702
-"#;
-
 /// The stacks-node Config.toml. Cross-service values (bitcoind endpoint, event
-/// observers, signer auth) are derived from the same `Stack` the other configs
+/// observers, signer auth) are derived from the same `Deployment` the other configs
 /// come from — matched by construction. The testnet shape mirrors
 /// stacks-core's sample/conf/testnet-follower-conf.toml.
-fn node_config_toml(stack: &Stack) -> String {
+fn node_config_toml(deployment: &Deployment) -> String {
+    let net = &deployment.net;
     let mut out = String::new();
-    let testnet = stack.network == Network::Testnet;
-
-    let (burn_mode, chain) = match stack.network {
-        Network::Mainnet => ("mainnet", "bitcoin"),
-        Network::Testnet => ("krypton", "bitcoin"),
-    };
 
     out.push_str("[node]\n");
     out.push_str("working_dir = \"/stacks-blockchain\"\n");
     out.push_str(&format!("rpc_bind = \"0.0.0.0:{NODE_RPC_PORT}\"\n"));
     out.push_str(&format!("p2p_bind = \"0.0.0.0:{NODE_P2P_PORT}\"\n"));
-    if testnet {
-        out.push_str(&format!("bootstrap_node = \"{TESTNET_BOOTSTRAP_NODE}\"\n"));
+    if let Some(bootstrap) = &net.node.bootstrap_node {
+        out.push_str(&format!("bootstrap_node = \"{bootstrap}\"\n"));
     }
-    if stack.stacks_signer.mode != ServiceMode::Disabled {
+    if deployment.stacks_signer.mode != ServiceMode::Disabled {
         out.push_str("stacker = true\n");
     } else {
         out.push_str("miner = false\nstacker = false\n");
     }
-    if testnet {
-        out.push_str(TESTNET_NODE_POX5);
+    if let Some(extra) = &net.node.node_extra {
+        out.push_str(extra.trim());
+        out.push('\n');
     }
     out.push('\n');
 
     out.push_str("[connection_options]\n");
-    out.push_str(&format!("auth_token = \"{}\"\n", node_auth_token(stack)));
+    out.push_str(&format!(
+        "auth_token = \"{}\"\n",
+        node_auth_token(deployment)
+    ));
     out.push_str("private_neighbors = false\n\n");
 
     out.push_str("[burnchain]\n");
-    out.push_str(&format!("mode = \"{burn_mode}\"\nchain = \"{chain}\"\n"));
-    if testnet {
-        // Krypton follows the Hiro-hosted regtest unless an external bitcoind
-        // is explicitly configured (a locally managed one is rejected at
-        // validation: its empty regtest chain cannot follow Hiro's).
-        let host = stack
-            .bitcoind
-            .host
-            .clone()
-            .filter(|_| stack.bitcoind.mode == ServiceMode::External)
-            .unwrap_or_else(|| TESTNET_BURNCHAIN_HOST.into());
-        let rpc = stack
-            .bitcoind
-            .rpc_port
-            .unwrap_or(bitcoind_rpc_port(stack.network));
-        let p2p = stack
-            .bitcoind
-            .p2p_port
-            .unwrap_or(bitcoind_p2p_port(stack.network));
+    out.push_str(&format!(
+        "mode = \"{}\"\nchain = \"bitcoin\"\n",
+        net.node.burnchain_mode
+    ));
+    // Burnchain endpoint: managed/external bitcoind, else the network's
+    // hosted default (validation guarantees one of these exists for a node).
+    if let Some(host) = bitcoind_host(deployment).or_else(|| net.bitcoind.default_host.clone()) {
         out.push_str(&format!("peer_host = \"{host}\"\n"));
-        out.push_str(&format!("rpc_port = {rpc}\npeer_port = {p2p}\n"));
-        out.push_str("pox_prepare_length = 100\npox_reward_length = 900\n");
-    } else if let Some(host) = bitcoind_host(stack) {
-        let rpc = stack
-            .bitcoind
-            .rpc_port
-            .unwrap_or(bitcoind_rpc_port(stack.network));
-        let p2p = stack
-            .bitcoind
-            .p2p_port
-            .unwrap_or(bitcoind_p2p_port(stack.network));
-        out.push_str(&format!("peer_host = \"{host}\"\n"));
-        out.push_str(&format!("rpc_port = {rpc}\npeer_port = {p2p}\n"));
         out.push_str(&format!(
-            "username = \"{}\"\npassword = \"{}\"\n",
-            stack.bitcoind.rpc_user.as_deref().unwrap_or("stacks"),
-            stack.bitcoind.rpc_password.as_deref().unwrap_or("stacks"),
+            "rpc_port = {}\npeer_port = {}\n",
+            bitcoind_rpc_port(deployment),
+            bitcoind_p2p_port(deployment)
+        ));
+        // Credentials: our managed bitcoind always has them (tool defaults);
+        // an external one only when both are explicitly configured —
+        // validation rejects partial credentials, so no silent fallbacks.
+        if deployment.bitcoind.mode == ServiceMode::Enabled {
+            out.push_str(&format!(
+                "username = \"{}\"\npassword = \"{}\"\n",
+                deployment.bitcoind.rpc_user.as_deref().unwrap_or("stacks"),
+                deployment
+                    .bitcoind
+                    .rpc_password
+                    .as_deref()
+                    .unwrap_or("stacks"),
+            ));
+        } else if let (Some(user), Some(password)) = (
+            &deployment.bitcoind.rpc_user,
+            &deployment.bitcoind.rpc_password,
+        ) {
+            out.push_str(&format!(
+                "username = \"{user}\"\npassword = \"{password}\"\n"
+            ));
+        }
+    }
+    if let (Some(prepare), Some(reward)) = (net.node.pox_prepare_length, net.node.pox_reward_length)
+    {
+        out.push_str(&format!(
+            "pox_prepare_length = {prepare}\npox_reward_length = {reward}\n"
         ));
     }
     out.push('\n');
 
-    if stack.stacks_api.mode == ServiceMode::Enabled {
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"stacks-api:{API_EVENT_PORT}\"\nevents_keys = {API_EVENTS_KEYS}\ntimeout_ms = 300_000\n\n"
         ));
-    } else if stack.stacks_api.mode == ServiceMode::External
-        && let (Some(host), Some(port)) =
-            (&stack.stacks_api.event_host, stack.stacks_api.event_port)
+    } else if deployment.stacks_api.mode == ServiceMode::External
+        && let (Some(host), Some(port)) = (
+            &deployment.stacks_api.event_host,
+            deployment.stacks_api.event_port,
+        )
     {
         out.push_str(&format!(
                 "[[events_observer]]\nendpoint = \"{host}:{port}\"\nevents_keys = {API_EVENTS_KEYS}\ntimeout_ms = 300_000\n\n"
             ));
     }
 
-    if stack.stacks_signer.mode == ServiceMode::Enabled {
+    if deployment.stacks_signer.mode == ServiceMode::Enabled {
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"stacks-signer:{SIGNER_ENDPOINT_PORT}\"\nevents_keys = [\"stackerdb\", \"block_proposal\", \"burn_blocks\"]\n\n"
         ));
     }
 
-    if testnet {
-        out.push_str(TESTNET_USTX_BALANCES);
-        out.push('\n');
-        out.push_str(TESTNET_EPOCHS);
+    for balance in &net.ustx_balances {
+        out.push_str(&format!(
+            "[[ustx_balance]]\naddress = \"{}\"\namount = {}\n\n",
+            balance.address, balance.amount
+        ));
+    }
+    for epoch in &net.epochs {
+        out.push_str(&format!(
+            "[[burnchain.epochs]]\nepoch_name = \"{}\"\nstart_height = {}\n\n",
+            epoch.epoch_name, epoch.start_height
+        ));
     }
 
     out
 }
 
-fn signer_config_toml(stack: &Stack) -> String {
-    let node_host = node_rpc_host(stack).unwrap_or_default();
+fn signer_config_toml(deployment: &Deployment) -> String {
+    let node_host = node_rpc_host(deployment).unwrap_or_default();
     format!(
         r#"node_host = "{node_host}:{rpc_port}"
 endpoint = "0.0.0.0:{endpoint_port}"
@@ -583,10 +468,10 @@ db_path = "/var/lib/stacks-signer/signerdb.sqlite"
 # TODO(hackathon): source the signing key from a secrets file, never this rendered config
 stacks_private_key = "REPLACE_ME"
 "#,
-        rpc_port = node_rpc_port(stack),
+        rpc_port = node_rpc_port(deployment),
         endpoint_port = SIGNER_ENDPOINT_PORT,
-        auth = node_auth_token(stack),
-        network = stack.network,
+        auth = node_auth_token(deployment),
+        network = deployment.network,
     )
 }
 
@@ -594,22 +479,19 @@ stacks_private_key = "REPLACE_ME"
 /// `auth_password` must match. External nodes bring their own token
 /// (`[stacks-node] auth_token`); managed nodes use a tool-managed one.
 // TODO(hackathon): generate per-stack random token into a gitignored secrets file.
-fn node_auth_token(stack: &Stack) -> String {
-    if stack.stacks_node.mode == ServiceMode::External
-        && let Some(token) = &stack.stacks_node.auth_token
+fn node_auth_token(deployment: &Deployment) -> String {
+    if deployment.stacks_node.mode == ServiceMode::External
+        && let Some(token) = &deployment.stacks_node.auth_token
     {
         return token.clone();
     }
     "stacks-tool-dev-auth-token".into()
 }
 
-fn api_env(stack: &Stack) -> String {
-    let chain_id = match stack.network {
-        Network::Mainnet => "0x00000001",
-        _ => "0x80000000",
-    };
-    let node_host = node_rpc_host(stack).unwrap_or_default();
-    let pg_host = postgres_host(stack).unwrap_or_default();
+fn api_env(deployment: &Deployment) -> String {
+    let chain_id = format!("0x{:08x}", deployment.net.chain_id);
+    let node_host = node_rpc_host(deployment).unwrap_or_default();
+    let pg_host = postgres_host(deployment).unwrap_or_default();
     format!(
         r#"NODE_ENV=production
 STACKS_CHAIN_ID={chain_id}
@@ -632,11 +514,15 @@ TESTNET_SBTC_FAUCET_ENABLED=false
 "#,
         api_port = API_PORT,
         event_port = API_EVENT_PORT,
-        node_rpc = node_rpc_port(stack),
-        pg_port = postgres_port(stack),
+        node_rpc = node_rpc_port(deployment),
+        pg_port = postgres_port(deployment),
         pg_schema = API_PG_SCHEMA,
-        pg_user = stack.postgres.user.as_deref().unwrap_or("postgres"),
-        pg_password = stack.postgres.password.as_deref().unwrap_or("postgres"),
+        pg_user = deployment.postgres.user.as_deref().unwrap_or("postgres"),
+        pg_password = deployment
+            .postgres
+            .password
+            .as_deref()
+            .unwrap_or("postgres"),
         pg_db = API_PG_DATABASE,
     )
 }
@@ -646,8 +532,8 @@ TESTNET_SBTC_FAUCET_ENABLED=false
 /// node's `connection_options.auth_token`, which this render guarantees
 /// matches by deriving both from the same source. Cache sizes/TTLs and
 /// BLOCK_HASH_MODE are left to the service's own defaults.
-fn mesh_api_env(stack: &Stack) -> String {
-    let node_host = node_rpc_host(stack).unwrap_or_default();
+fn mesh_api_env(deployment: &Deployment) -> String {
+    let node_host = node_rpc_host(deployment).unwrap_or_default();
     format!(
         r#"API_HOST=0.0.0.0
 API_PORT={api_port}
@@ -658,21 +544,21 @@ STACKS_CORE_RPC_PORT={node_rpc}
 STACKS_CORE_RPC_AUTH_TOKEN={auth_token}
 "#,
         api_port = MESH_API_PORT,
-        node_rpc = node_rpc_port(stack),
-        auth_token = node_auth_token(stack),
+        node_rpc = node_rpc_port(deployment),
+        auth_token = node_auth_token(deployment),
     )
 }
 
 /// Config the user must apply to their *external* node so push edges
 /// (events to the API, signer wiring) actually close.
-fn apply_to_your_node(stack: &Stack) -> Option<String> {
+fn apply_to_your_node(deployment: &Deployment) -> Option<String> {
     let mut out = String::from(
         "# Add these blocks to your stacks-node config, then restart it.\n\
          # Verify events are flowing afterwards with `stacksup config check`.\n\n",
     );
     let mut needed = false;
 
-    if stack.stacks_api.mode == ServiceMode::Enabled {
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
         // TODO(hackathon): make the advertised host configurable; the external
         // node must be able to reach the machine running this stack.
         out.push_str(&format!(
@@ -680,12 +566,12 @@ fn apply_to_your_node(stack: &Stack) -> Option<String> {
         ));
         needed = true;
     }
-    if stack.stacks_signer.mode == ServiceMode::Enabled {
+    if deployment.stacks_signer.mode == ServiceMode::Enabled {
         out.push_str(&format!(
             "[node]\nstacker = true\n\n\
              [connection_options]\nauth_token = \"{}\"\n\n\
              [[events_observer]]\nendpoint = \"<this-machine>:{SIGNER_ENDPOINT_PORT}\"\nevents_keys = [\"stackerdb\", \"block_proposal\", \"burn_blocks\"]\n\n",
-            node_auth_token(stack)
+            node_auth_token(deployment)
         ));
         needed = true;
     }
@@ -697,22 +583,22 @@ fn apply_to_your_node(stack: &Stack) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn stack(toml_str: &str) -> Stack {
-        toml::from_str(toml_str).expect("test stack.toml should parse")
+    fn deployment(toml_str: &str) -> Deployment {
+        crate::config::test_deployment(toml_str)
     }
 
     const TESTNET_FULL: &str = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[stacks-mesh-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"";
 
     #[test]
     fn testnet_node_config_matches_reference_shape() {
-        let s = stack("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let s = deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
         let toml_text = node_config_toml(&s);
         let parsed: toml::Value =
             toml::from_str(&toml_text).expect("rendered node config is valid TOML");
         assert_eq!(parsed["burnchain"]["mode"].as_str(), Some("krypton"));
         assert_eq!(
             parsed["burnchain"]["peer_host"].as_str(),
-            Some(TESTNET_BURNCHAIN_HOST)
+            Some("bitcoin.regtest.hiro.so")
         );
         assert_eq!(parsed["burnchain"]["rpc_port"].as_integer(), Some(18443));
         assert!(
@@ -730,7 +616,7 @@ mod tests {
 
     #[test]
     fn signer_flips_stacker_and_shares_auth_token() {
-        let s = stack(TESTNET_FULL);
+        let s = deployment(TESTNET_FULL);
         let node: toml::Value = toml::from_str(&node_config_toml(&s)).unwrap();
         assert_eq!(node["node"]["stacker"].as_bool(), Some(true));
         let token = node["connection_options"]["auth_token"]
@@ -744,7 +630,7 @@ mod tests {
 
     #[test]
     fn api_env_wires_postgres_and_schema() {
-        let s = stack(TESTNET_FULL);
+        let s = deployment(TESTNET_FULL);
         let env = api_env(&s);
         assert!(env.contains("PG_HOST=postgres"));
         assert!(env.contains(&format!("PG_DATABASE={API_PG_DATABASE}")));
@@ -754,14 +640,15 @@ mod tests {
 
     #[test]
     fn postgres_mount_depends_on_major() {
-        let pg17 = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"\nversion = \"17\"");
+        let pg17 =
+            deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"\nversion = \"17\"");
         assert_eq!(postgres_major(&pg17), Some(17));
         assert!(postgres_service(&pg17).volumes[0].ends_with(":/var/lib/postgresql/data"));
-        let latest = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        let latest = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
         assert_eq!(postgres_major(&latest), None);
         assert!(postgres_service(&latest).volumes[0].ends_with(":/var/lib/postgresql"));
         assert_eq!(
-            postgres_major(&stack(
+            postgres_major(&deployment(
                 "network = \"testnet\"\n[postgres]\nversion = \"17.5-alpine\""
             )),
             Some(17)
@@ -769,16 +656,39 @@ mod tests {
     }
 
     #[test]
+    fn external_bitcoind_credentials_all_or_nothing() {
+        // both set -> rendered verbatim
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\nhost = \"h\"\nrpc_user = \"u\"\nrpc_password = \"p\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let cfg = node_config_toml(&d);
+        assert!(cfg.contains("username = \"u\"") && cfg.contains("password = \"p\""));
+        // none set -> no credential lines, no silent defaults
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\nhost = \"h\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let cfg = node_config_toml(&d);
+        assert!(!cfg.contains("username"));
+        // managed -> tool defaults present
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let cfg = node_config_toml(&d);
+        assert!(cfg.contains("username = \"stacks\""));
+    }
+
+    #[test]
     fn apply_to_your_node_only_for_push_edges() {
         // external node + enabled api -> snippet with the api observer
-        let s = stack(
+        let s = deployment(
             "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
         );
         let snippet = apply_to_your_node(&s).expect("push edge needs the snippet");
         assert!(snippet.contains("[[events_observer]]"));
         // external node with nothing to push to -> no snippet
-        let s =
-            stack("network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"");
+        let s = deployment(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"",
+        );
         assert!(apply_to_your_node(&s).is_none());
     }
 
@@ -788,7 +698,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let s = stack(TESTNET_FULL);
+        let s = deployment(TESTNET_FULL);
         render(&s, &dir).unwrap();
 
         let compose_text = std::fs::read_to_string(compose_file(&dir)).unwrap();
