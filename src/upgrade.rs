@@ -402,3 +402,88 @@ fn ghcr_tags(path: &str) -> Result<Vec<String>> {
         })
         .unwrap_or_default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(
+        current: Option<Vec<u64>>,
+        major_pin: bool,
+        same: Option<Vec<u64>>,
+        next: Option<Vec<u64>>,
+    ) -> Row {
+        Row {
+            name: "stacks-api",
+            current,
+            current_note: "",
+            major_pin,
+            same_major: same,
+            next_major: next,
+            error: None,
+        }
+    }
+
+    fn verdict_text(r: &Row) -> (String, String, u32) {
+        let mut upgrades = 0;
+        let (available, verdict) = verdict(r, &mut upgrades);
+        (available, verdict, upgrades)
+    }
+
+    #[test]
+    fn up_to_date_counts_no_upgrade() {
+        let (_, v, n) = verdict_text(&row(Some(vec![9, 0, 2]), false, Some(vec![9, 0, 2]), None));
+        assert!(v.contains("up to date"));
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn minor_and_major_both_reported() {
+        let (avail, v, n) = verdict_text(&row(
+            Some(vec![8, 5, 0]),
+            false,
+            Some(vec![8, 15, 4]),
+            Some(vec![9, 0, 2]),
+        ));
+        assert!(avail.contains("8.15.4") && avail.contains("9.0.2"));
+        assert!(v.contains("upgrade + new MAJOR"));
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn major_pin_only_alerts_on_new_major() {
+        // tracking `17`: newer 17.x is NOT an upgrade suggestion
+        let (_, v, n) = verdict_text(&row(Some(vec![17]), true, Some(vec![17, 9]), None));
+        assert!(v.contains("tracking latest"));
+        assert_eq!(n, 0);
+        let (_, v, n) = verdict_text(&row(
+            Some(vec![17]),
+            true,
+            Some(vec![17, 9]),
+            Some(vec![18, 4]),
+        ));
+        assert!(v.contains("new MAJOR"));
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn api_major_guidance_is_db_breaking_with_reseed_steps() {
+        let text = guidance(&row(Some(vec![8, 5, 0]), false, None, Some(vec![9, 0, 2]))).unwrap();
+        assert!(text.contains("DB-BREAKING"));
+        assert!(text.contains("stacksup chainstate wipe postgres"));
+        assert!(text.contains("chainstate download --service api"));
+    }
+
+    #[test]
+    fn postgres_major_guidance_warns_about_migration() {
+        let mut r = row(Some(vec![17]), true, None, Some(vec![18, 4]));
+        r.name = "postgres";
+        let text = guidance(&r).unwrap();
+        assert!(text.contains("does not migrate itself"));
+    }
+
+    #[test]
+    fn no_guidance_when_current() {
+        assert!(guidance(&row(Some(vec![9, 0, 2]), false, Some(vec![9, 0, 2]), None)).is_none());
+    }
+}

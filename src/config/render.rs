@@ -692,3 +692,123 @@ fn apply_to_your_node(stack: &Stack) -> Option<String> {
 
     needed.then_some(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack(toml_str: &str) -> Stack {
+        toml::from_str(toml_str).expect("test stack.toml should parse")
+    }
+
+    const TESTNET_FULL: &str = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[stacks-mesh-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"";
+
+    #[test]
+    fn testnet_node_config_matches_reference_shape() {
+        let s = stack("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let toml_text = node_config_toml(&s);
+        let parsed: toml::Value =
+            toml::from_str(&toml_text).expect("rendered node config is valid TOML");
+        assert_eq!(parsed["burnchain"]["mode"].as_str(), Some("krypton"));
+        assert_eq!(
+            parsed["burnchain"]["peer_host"].as_str(),
+            Some(TESTNET_BURNCHAIN_HOST)
+        );
+        assert_eq!(parsed["burnchain"]["rpc_port"].as_integer(), Some(18443));
+        assert!(
+            parsed["node"]["bootstrap_node"]
+                .as_str()
+                .unwrap()
+                .contains("seed.testnet.hiro.so")
+        );
+        // follower: explicitly not mining or stacking
+        assert_eq!(parsed["node"]["miner"].as_bool(), Some(false));
+        assert_eq!(parsed["node"]["stacker"].as_bool(), Some(false));
+        assert_eq!(parsed["ustx_balance"].as_array().unwrap().len(), 12);
+        assert_eq!(parsed["burnchain"]["epochs"].as_array().unwrap().len(), 14);
+    }
+
+    #[test]
+    fn signer_flips_stacker_and_shares_auth_token() {
+        let s = stack(TESTNET_FULL);
+        let node: toml::Value = toml::from_str(&node_config_toml(&s)).unwrap();
+        assert_eq!(node["node"]["stacker"].as_bool(), Some(true));
+        let token = node["connection_options"]["auth_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // signer auth_password and mesh env token must match the node's token
+        assert!(signer_config_toml(&s).contains(&format!("auth_password = \"{token}\"")));
+        assert!(mesh_api_env(&s).contains(&format!("STACKS_CORE_RPC_AUTH_TOKEN={token}")));
+    }
+
+    #[test]
+    fn api_env_wires_postgres_and_schema() {
+        let s = stack(TESTNET_FULL);
+        let env = api_env(&s);
+        assert!(env.contains("PG_HOST=postgres"));
+        assert!(env.contains(&format!("PG_DATABASE={API_PG_DATABASE}")));
+        assert!(env.contains(&format!("PG_SCHEMA={API_PG_SCHEMA}")));
+        assert!(env.contains("STACKS_CHAIN_ID=0x80000000"));
+    }
+
+    #[test]
+    fn postgres_mount_depends_on_major() {
+        let pg17 = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"\nversion = \"17\"");
+        assert_eq!(postgres_major(&pg17), Some(17));
+        assert!(postgres_service(&pg17).volumes[0].ends_with(":/var/lib/postgresql/data"));
+        let latest = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        assert_eq!(postgres_major(&latest), None);
+        assert!(postgres_service(&latest).volumes[0].ends_with(":/var/lib/postgresql"));
+        assert_eq!(
+            postgres_major(&stack(
+                "network = \"testnet\"\n[postgres]\nversion = \"17.5-alpine\""
+            )),
+            Some(17)
+        );
+    }
+
+    #[test]
+    fn apply_to_your_node_only_for_push_edges() {
+        // external node + enabled api -> snippet with the api observer
+        let s = stack(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        let snippet = apply_to_your_node(&s).expect("push edge needs the snippet");
+        assert!(snippet.contains("[[events_observer]]"));
+        // external node with nothing to push to -> no snippet
+        let s =
+            stack("network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"");
+        assert!(apply_to_your_node(&s).is_none());
+    }
+
+    #[test]
+    fn render_writes_expected_tree_and_valid_compose() {
+        let dir = std::env::temp_dir().join(format!("stacksup-render-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let s = stack(TESTNET_FULL);
+        render(&s, &dir).unwrap();
+
+        let compose_text = std::fs::read_to_string(compose_file(&dir)).unwrap();
+        let compose: serde_yaml::Value = serde_yaml::from_str(&compose_text).unwrap();
+        let services = compose["services"].as_mapping().unwrap();
+        for name in [
+            "stacks-node",
+            "stacks-signer",
+            "stacks-api",
+            "stacks-mesh-api",
+            "postgres",
+        ] {
+            assert!(services.contains_key(name), "compose missing {name}");
+        }
+        // testnet must NOT render a managed bitcoind
+        assert!(!services.contains_key("bitcoind"));
+        assert!(dir.join("rendered/stacks-node/Config.toml").exists());
+        assert!(dir.join("rendered/stacks-api/.env").exists());
+        assert!(dir.join("chainstate/stacks-node").is_dir());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
