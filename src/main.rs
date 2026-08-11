@@ -1,13 +1,8 @@
 mod chainstate;
 mod config;
-mod docker;
-mod doctor;
-mod download;
-mod export;
-mod render;
-mod services;
+mod logs;
 mod upgrade;
-mod versions;
+mod utils;
 
 use std::path::PathBuf;
 
@@ -189,13 +184,13 @@ fn run() -> Result<()> {
             ConfigCommand::Init { force } => config::init(force),
             ConfigCommand::Render => {
                 let stack = config::load(&cli.config)?;
-                let dir = render::render(&stack, &cli.data_dir)?;
+                let dir = config::render::render(&stack, &cli.data_dir)?;
                 println!("Rendered service configs to {}/", dir.display());
                 Ok(())
             }
             ConfigCommand::Check => {
                 let stack = config::load(&cli.config)?;
-                doctor::run(&stack)
+                config::check::run(&stack)
             }
         },
         Command::Logs { service, command } => match command {
@@ -206,11 +201,11 @@ fn run() -> Result<()> {
                 out,
             }) => {
                 let stack = config::load(&cli.config)?;
-                export::run(
+                logs::export::run(
                     &stack,
                     &cli.config,
                     &cli.data_dir,
-                    export::Opts {
+                    logs::export::Opts {
                         service,
                         since,
                         logs_only,
@@ -220,31 +215,31 @@ fn run() -> Result<()> {
             }
             None => {
                 let stack = config::load(&cli.config)?;
-                docker::logs(&stack, &cli.data_dir, service.as_deref())
+                utils::docker::logs(&stack, &cli.data_dir, service.as_deref())
             }
         },
         Command::Start { service, no_render } => {
             let stack = config::load(&cli.config)?;
             if !no_render {
-                render::render(&stack, &cli.data_dir)?;
+                config::render::render(&stack, &cli.data_dir)?;
             }
-            docker::start(&stack, &cli.data_dir, service.as_deref())
+            utils::docker::start(&stack, &cli.data_dir, service.as_deref())
         }
         Command::Stop { service, destroy } => {
             let stack = config::load(&cli.config)?;
-            docker::stop(&stack, &cli.data_dir, service.as_deref(), destroy)
+            utils::docker::stop(&stack, &cli.data_dir, service.as_deref(), destroy)
         }
         Command::Restart { service, no_render } => {
             let stack = config::load(&cli.config)?;
             if !no_render {
-                render::render(&stack, &cli.data_dir)?;
+                config::render::render(&stack, &cli.data_dir)?;
             }
-            docker::restart(&stack, &cli.data_dir, service.as_deref())
+            utils::docker::restart(&stack, &cli.data_dir, service.as_deref())
         }
         Command::Pull => {
             let stack = config::load(&cli.config)?;
-            render::render(&stack, &cli.data_dir)?;
-            docker::pull(&stack, &cli.data_dir)
+            config::render::render(&stack, &cli.data_dir)?;
+            utils::docker::pull(&stack, &cli.data_dir)
         }
         Command::Upgrade { service } => {
             let stack = config::load(&cli.config)?;
@@ -252,7 +247,7 @@ fn run() -> Result<()> {
         }
         Command::Status => {
             let stack = config::load(&cli.config)?;
-            docker::status(&stack, &cli.data_dir)
+            utils::docker::status(&stack, &cli.data_dir)
         }
         Command::Chainstate { command } => match command {
             ChainstateCommand::Wipe { service, yes } => {
@@ -272,20 +267,20 @@ fn run() -> Result<()> {
                 keep_archives,
             } => {
                 let service = match service {
-                    ServiceArg::Node => download::ServiceSel::Node,
-                    ServiceArg::Api => download::ServiceSel::Api,
-                    ServiceArg::All => download::ServiceSel::All,
+                    ServiceArg::Node => chainstate::download::ServiceSel::Node,
+                    ServiceArg::Api => chainstate::download::ServiceSel::Api,
+                    ServiceArg::All => chainstate::download::ServiceSel::All,
                 };
-                if archive.is_some() && matches!(service, download::ServiceSel::All) {
+                if archive.is_some() && matches!(service, chainstate::download::ServiceSel::All) {
                     anyhow::bail!(
                         "--archive requires exactly one service: --service node or --service api"
                     );
                 }
                 let stack = config::load(&cli.config)?;
-                download::run(
+                chainstate::download::run(
                     &stack,
                     &cli.data_dir,
-                    download::Opts {
+                    chainstate::download::Opts {
                         service,
                         archive,
                         check_only,

@@ -1,6 +1,8 @@
 //! `stacksup chainstate` — operations on the stack's on-disk state.
 //! More subcommands (snapshot, restore, ...) will land here.
 
+pub mod download;
+
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
@@ -26,7 +28,7 @@ struct Tip {
 /// even while the node writes), while the API's tip lives in Postgres and
 /// bitcoind's in LevelDB — those two are only checkable while running.
 pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
-    let running = crate::docker::running_services(data_dir).unwrap_or_default();
+    let running = crate::utils::docker::running_services(data_dir).unwrap_or_default();
     let mut tips: Vec<Tip> = Vec::new();
 
     if stack.stacks_node.mode == ServiceMode::Enabled {
@@ -318,7 +320,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
     }
 
     // Wiping state under running containers corrupts them; refuse first.
-    if let Some(running) = crate::docker::running_services(data_dir) {
+    if let Some(running) = crate::utils::docker::running_services(data_dir) {
         let blocking: Vec<&String> = running
             .iter()
             .filter(|r| service.is_none() || affected.contains(&r.as_str()))

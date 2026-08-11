@@ -9,8 +9,8 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
 use crate::config::{ServiceMode, Stack};
-use crate::render::{COMPOSE_PROJECT, compose_file};
-use crate::services::roster;
+use crate::config::render::{COMPOSE_PROJECT, compose_file};
+use crate::utils::services::roster;
 
 fn compose(data_dir: &Path) -> Command {
     let mut cmd = Command::new("docker");

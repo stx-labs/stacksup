@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
 use crate::config::{ServiceMode, Stack};
-use crate::services::roster;
+use crate::utils::services::roster;
 
 pub struct Opts {
     pub service: Option<String>,
@@ -25,11 +25,11 @@ pub struct Opts {
 }
 
 pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Result<()> {
-    crate::docker::preflight(data_dir)?;
+    crate::utils::docker::preflight(data_dir)?;
 
     let services: Vec<String> = match &opts.service {
         Some(name) => {
-            crate::docker::ensure_enabled(stack, name)?;
+            crate::utils::docker::ensure_enabled(stack, name)?;
             vec![name.clone()]
         }
         None => roster(stack)
@@ -45,7 +45,7 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
     // Containers that still exist (logs live inside them). `stacksup stop`
     // keeps them; `stacksup stop --destroy` removes them along with their logs.
     let existing: Vec<String> =
-        crate::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
+        crate::utils::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
             .lines()
             .map(str::to_owned)
             .collect();
@@ -98,22 +98,22 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         let meta = format!(
             "stacks-tool version: {}\nnetwork: {network}\ncreated: {ts}\ndocker: {}\ncompose: {}\nservices: {}\n",
             env!("CARGO_PKG_VERSION"),
-            crate::docker::daemon_version().unwrap_or_else(|e| format!("unavailable ({e})")),
-            crate::docker::compose_version().unwrap_or_else(|e| format!("unavailable ({e})")),
+            crate::utils::docker::daemon_version().unwrap_or_else(|e| format!("unavailable ({e})")),
+            crate::utils::docker::compose_version().unwrap_or_else(|e| format!("unavailable ({e})")),
             services.join(", "),
         );
         fs::write(tmp.join("meta.txt"), meta)?;
         fs::write(
             tmp.join("ps.txt"),
             redact(
-                &crate::docker::compose_capture(data_dir, &["ps", "-a"])?,
+                &crate::utils::docker::compose_capture(data_dir, &["ps", "-a"])?,
                 &secrets,
             ),
         )?;
         fs::write(
             tmp.join("images.txt"),
             redact(
-                &crate::docker::compose_capture(data_dir, &["images"])?,
+                &crate::utils::docker::compose_capture(data_dir, &["images"])?,
                 &secrets,
             ),
         )?;
@@ -172,7 +172,7 @@ fn print_review_note() {
 }
 
 fn capture_logs(data_dir: &Path, service: &str, since: &str) -> String {
-    crate::docker::compose_capture(
+    crate::utils::docker::compose_capture(
         data_dir,
         &[
             "logs",

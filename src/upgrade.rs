@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 
 use crate::config::{ServiceMode, Stack};
-use crate::versions::*;
+use crate::utils::versions::*;
 
 struct Row {
     name: &'static str,
@@ -30,32 +30,32 @@ pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
         (
             "bitcoind",
             stack.bitcoind.mode,
-            crate::services::bitcoind_image(stack),
+            crate::utils::services::bitcoind_image(stack),
         ),
         (
             "stacks-node",
             stack.stacks_node.mode,
-            crate::services::stacks_node_image(stack),
+            crate::utils::services::stacks_node_image(stack),
         ),
         (
             "stacks-signer",
             stack.stacks_signer.mode,
-            crate::services::stacks_signer_image(stack),
+            crate::utils::services::stacks_signer_image(stack),
         ),
         (
             "stacks-api",
             stack.stacks_api.mode,
-            crate::services::stacks_api_image(stack),
+            crate::utils::services::stacks_api_image(stack),
         ),
         (
             "stacks-mesh-api",
             stack.stacks_mesh_api.mode,
-            crate::services::stacks_mesh_api_image(stack),
+            crate::utils::services::stacks_mesh_api_image(stack),
         ),
         (
             "postgres",
             stack.postgres.mode,
-            crate::services::postgres_image(stack),
+            crate::utils::services::postgres_image(stack),
         ),
     ]
     .into_iter()
