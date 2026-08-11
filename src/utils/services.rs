@@ -110,3 +110,69 @@ pub fn roster(stack: &Stack) -> Vec<(&'static str, ServiceMode)> {
         ("postgres", stack.postgres.mode),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Stack;
+
+    fn stack(toml_str: &str) -> Stack {
+        toml::from_str(toml_str).expect("test stack.toml should parse")
+    }
+
+    #[test]
+    fn image_uses_default_tag_when_version_unset() {
+        let s = stack("network = \"testnet\"");
+        assert!(stacks_node_image(&s).ends_with(":latest"));
+        assert!(postgres_image(&s).starts_with("postgres:"));
+    }
+
+    #[test]
+    fn image_uses_configured_version() {
+        let s = stack(
+            "network = \"testnet\"\n[stacks-node]\nversion = \"4.0.1\"\n[postgres]\nversion = \"17\"",
+        );
+        assert!(stacks_node_image(&s).ends_with(":4.0.1"));
+        assert_eq!(postgres_image(&s), "postgres:17");
+    }
+
+    #[test]
+    fn bitcoind_ports_per_network() {
+        assert_eq!(bitcoind_rpc_port(Network::Mainnet), 8332);
+        assert_eq!(bitcoind_p2p_port(Network::Mainnet), 8333);
+        // non-mainnet is the Hiro-hosted regtest, hence regtest ports
+        assert_eq!(bitcoind_rpc_port(Network::Testnet), 18443);
+        assert_eq!(bitcoind_p2p_port(Network::Testnet), 18444);
+    }
+
+    #[test]
+    fn hosts_follow_service_mode() {
+        let s = stack(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"10.0.1.6\"",
+        );
+        assert_eq!(bitcoind_host(&s), Some("bitcoind".into()));
+        assert_eq!(node_rpc_host(&s), Some("10.0.1.6".into()));
+        assert_eq!(postgres_host(&s), None); // disabled by default
+    }
+
+    #[test]
+    fn port_overrides_apply() {
+        let s = stack(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\nrpc_port = 30443\n[postgres]\nmode = \"enabled\"",
+        );
+        assert_eq!(node_rpc_port(&s), 30443);
+        assert_eq!(postgres_port(&s), POSTGRES_PORT);
+    }
+
+    #[test]
+    fn roster_lists_all_services_with_modes() {
+        use crate::config::ServiceMode;
+        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        let roster = roster(&s);
+        assert_eq!(roster.len(), 6);
+        let (name, mode) = roster.iter().find(|(n, _)| *n == "postgres").unwrap();
+        assert_eq!(*name, "postgres");
+        assert_eq!(*mode, ServiceMode::Enabled);
+        assert!(roster.iter().any(|(n, _)| *n == "stacks-mesh-api"));
+    }
+}

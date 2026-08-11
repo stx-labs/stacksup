@@ -25,8 +25,13 @@ pub fn version_string(v: &[u64]) -> String {
     v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
 }
 
+/// Tag of an image ref, defaulting to `latest` when untagged. A colon whose
+/// right side contains `/` is a registry port (`localhost:5000/repo`), not a tag.
 pub fn image_tag(image: &str) -> String {
-    image.rsplit(':').next().unwrap_or("latest").to_string()
+    match image.rsplit_once(':') {
+        Some((_, tag)) if !tag.contains('/') => tag.to_string(),
+        _ => "latest".to_string(),
+    }
 }
 
 /// Concrete version of a locally pulled image, from its OCI version label
@@ -46,9 +51,63 @@ pub fn pulled_image_version(image: &str) -> Option<Vec<u64>> {
     if !out.status.success() {
         return None;
     }
-    let label = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .trim_start_matches('v')
-        .to_string();
-    parse_version(&label)
+    version_from_label(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse a version out of an OCI label value ("9.0.2", "v9.0.2", trailing newline).
+fn version_from_label(label: &str) -> Option<Vec<u64>> {
+    parse_version(label.trim().trim_start_matches('v'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering::*;
+
+    #[test]
+    fn parses_versions() {
+        assert_eq!(parse_version("9.0.2"), Some(vec![9, 0, 2]));
+        assert_eq!(parse_version("3.1.0.0.8"), Some(vec![3, 1, 0, 0, 8]));
+        // a bare major parses; callers decide whether that counts as a full pin
+        assert_eq!(parse_version("9"), Some(vec![9]));
+        assert_eq!(parse_version("latest"), None);
+        assert_eq!(parse_version("9.0.2-alpine"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn compares_with_zero_padding() {
+        assert_eq!(compare_versions(&[9, 1, 0], &[9, 0, 2]), Greater);
+        assert_eq!(compare_versions(&[3, 1], &[3, 1, 0]), Equal);
+        assert_eq!(compare_versions(&[3, 1, 0], &[3, 2]), Less);
+        assert_eq!(compare_versions(&[10], &[9, 9, 9]), Greater);
+    }
+
+    #[test]
+    fn version_string_round_trips() {
+        let v = parse_version("3.1.0.0.8").unwrap();
+        assert_eq!(version_string(&v), "3.1.0.0.8");
+    }
+
+    #[test]
+    fn extracts_image_tags() {
+        assert_eq!(image_tag("postgres:17"), "17");
+        assert_eq!(
+            image_tag("ghcr.io/stacks-network/stacks-core:4.0.1"),
+            "4.0.1"
+        );
+        // untagged refs default to latest
+        assert_eq!(image_tag("postgres"), "latest");
+        // a registry port is not a tag
+        assert_eq!(image_tag("localhost:5000/repo"), "latest");
+        assert_eq!(image_tag("localhost:5000/repo:1.2"), "1.2");
+    }
+
+    #[test]
+    fn parses_oci_version_labels() {
+        assert_eq!(version_from_label("9.0.2\n"), Some(vec![9, 0, 2]));
+        assert_eq!(version_from_label("v4.0.1"), Some(vec![4, 0, 1]));
+        assert_eq!(version_from_label(""), None);
+        assert_eq!(version_from_label("<no value>"), None);
+    }
 }
