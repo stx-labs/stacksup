@@ -79,6 +79,14 @@ pub fn load(name: &str, config_dir: &Path) -> Result<NetworkDef> {
         return parse(raw).with_context(|| format!("embedded network definition `{name}`"));
     }
 
+    // Custom definitions resolve relative to stacks.toml only — an absolute
+    // path would silently bypass config_dir (Path::join discards the base).
+    if Path::new(name).is_absolute() {
+        bail!(
+            "network `{name}`: custom definition paths must be relative to the \
+             directory containing stacks.toml"
+        );
+    }
     let candidates = [
         config_dir.join(name),
         config_dir.join("networks").join(format!("{name}.toml")),
@@ -103,8 +111,16 @@ pub fn load(name: &str, config_dir: &Path) -> Result<NetworkDef> {
 
 fn parse(raw: &str) -> Result<NetworkDef> {
     let def: NetworkDef = toml::from_str(raw)?;
+    // Missing fields are already serde errors (nothing here is defaulted);
+    // these guards catch the empty/zero values serde accepts.
     if def.name.is_empty() || def.node.burnchain_mode.is_empty() {
         bail!("network definition must set `name` and [node] burnchain_mode");
+    }
+    if def.bitcoind.chain.is_empty() {
+        bail!("network definition must set a non-empty [bitcoind] chain");
+    }
+    if def.bitcoind.rpc_port == 0 || def.bitcoind.p2p_port == 0 {
+        bail!("network definition must set non-zero [bitcoind] rpc_port and p2p_port");
     }
     Ok(def)
 }
@@ -147,6 +163,35 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("mainnet, testnet"));
+    }
+
+    #[test]
+    fn absolute_custom_paths_are_rejected() {
+        let err = load("/etc/evil.toml", Path::new("/tmp"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must be relative"));
+    }
+
+    #[test]
+    fn zero_ports_and_empty_chain_are_rejected() {
+        let base = "name = \"x\"\nchain_id = 1\n[bitcoind]\nallow_managed = true\nchain = \"{chain}\"\nrpc_port = {rpc}\np2p_port = 8333\n[node]\nburnchain_mode = \"mainnet\"\n";
+        let bad_port = base.replace("{chain}", "main").replace("{rpc}", "0");
+        assert!(
+            parse(&bad_port)
+                .unwrap_err()
+                .to_string()
+                .contains("non-zero")
+        );
+        let bad_chain = base.replace("{chain}", "").replace("{rpc}", "8332");
+        assert!(
+            parse(&bad_chain)
+                .unwrap_err()
+                .to_string()
+                .contains("non-empty")
+        );
+        let good = base.replace("{chain}", "main").replace("{rpc}", "8332");
+        assert!(parse(&good).is_ok());
     }
 
     #[test]

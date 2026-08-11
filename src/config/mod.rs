@@ -170,6 +170,11 @@ impl Deployment {
         if self.bitcoind.mode == ServiceMode::External && self.bitcoind.host.is_none() {
             errors.push("[bitcoind] mode = \"external\" requires `host`".into());
         }
+        if self.bitcoind.mode == ServiceMode::External
+            && self.bitcoind.rpc_user.is_some() != self.bitcoind.rpc_password.is_some()
+        {
+            errors.push("[bitcoind] rpc_user and rpc_password must be set together".into());
+        }
         if self.stacks_node.mode == ServiceMode::External && self.stacks_node.rpc_host.is_none() {
             errors.push("[stacks-node] mode = \"external\" requires `rpc_host`".into());
         }
@@ -403,6 +408,17 @@ mod tests {
             e.iter()
                 .any(|m| m.contains("[postgres]") && m.contains("`host`"))
         );
+    }
+
+    #[test]
+    fn external_bitcoind_credentials_must_come_in_pairs() {
+        let base = "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\nhost = \"h\"";
+        let e = errors(&format!("{base}\nrpc_user = \"u\""));
+        assert!(e.iter().any(|m| m.contains("set together")));
+        let e = errors(&format!("{base}\nrpc_password = \"p\""));
+        assert!(e.iter().any(|m| m.contains("set together")));
+        assert!(errors(&format!("{base}\nrpc_user = \"u\"\nrpc_password = \"p\"")).is_empty());
+        assert!(errors(base).is_empty());
     }
 
     #[test]

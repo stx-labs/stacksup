@@ -390,12 +390,10 @@ fn node_config_toml(deployment: &Deployment) -> String {
             bitcoind_rpc_port(deployment),
             bitcoind_p2p_port(deployment)
         ));
-        // Credentials: our managed bitcoind always has them; an external one
-        // only if configured; a hosted default has none.
-        if deployment.bitcoind.mode == ServiceMode::Enabled
-            || (deployment.bitcoind.mode == ServiceMode::External
-                && deployment.bitcoind.rpc_user.is_some())
-        {
+        // Credentials: our managed bitcoind always has them (tool defaults);
+        // an external one only when both are explicitly configured —
+        // validation rejects partial credentials, so no silent fallbacks.
+        if deployment.bitcoind.mode == ServiceMode::Enabled {
             out.push_str(&format!(
                 "username = \"{}\"\npassword = \"{}\"\n",
                 deployment.bitcoind.rpc_user.as_deref().unwrap_or("stacks"),
@@ -404,6 +402,13 @@ fn node_config_toml(deployment: &Deployment) -> String {
                     .rpc_password
                     .as_deref()
                     .unwrap_or("stacks"),
+            ));
+        } else if let (Some(user), Some(password)) = (
+            &deployment.bitcoind.rpc_user,
+            &deployment.bitcoind.rpc_password,
+        ) {
+            out.push_str(&format!(
+                "username = \"{user}\"\npassword = \"{password}\"\n"
             ));
         }
     }
@@ -648,6 +653,28 @@ mod tests {
             )),
             Some(17)
         );
+    }
+
+    #[test]
+    fn external_bitcoind_credentials_all_or_nothing() {
+        // both set -> rendered verbatim
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\nhost = \"h\"\nrpc_user = \"u\"\nrpc_password = \"p\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let cfg = node_config_toml(&d);
+        assert!(cfg.contains("username = \"u\"") && cfg.contains("password = \"p\""));
+        // none set -> no credential lines, no silent defaults
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\nhost = \"h\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let cfg = node_config_toml(&d);
+        assert!(!cfg.contains("username"));
+        // managed -> tool defaults present
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let cfg = node_config_toml(&d);
+        assert!(cfg.contains("username = \"stacks\""));
     }
 
     #[test]
