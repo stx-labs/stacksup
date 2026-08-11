@@ -337,3 +337,48 @@ pub fn logs(_stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<()
     }
     run(cmd, "docker compose logs")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack(toml_str: &str) -> Stack {
+        toml::from_str(toml_str).expect("test stack.toml should parse")
+    }
+
+    #[test]
+    fn compose_targets_project_and_rendered_file() {
+        let cmd = compose(Path::new("/data"));
+        assert_eq!(cmd.get_program(), "docker");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[..4], ["compose", "-p", COMPOSE_PROJECT, "-f"]);
+        assert!(args[4].ends_with("rendered/docker-compose.yml"));
+        assert!(args[4].starts_with("/data"));
+    }
+
+    #[test]
+    fn ensure_enabled_accepts_enabled_services() {
+        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        assert!(ensure_enabled(&s, "postgres").is_ok());
+    }
+
+    #[test]
+    fn ensure_enabled_rejects_external_and_disabled() {
+        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"external\"\nhost = \"pg\"");
+        let err = ensure_enabled(&s, "postgres").unwrap_err().to_string();
+        assert!(err.contains("external"));
+        let err = ensure_enabled(&s, "stacks-node").unwrap_err().to_string();
+        assert!(err.contains("disabled"));
+    }
+
+    #[test]
+    fn ensure_enabled_unknown_lists_enabled_services() {
+        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        let err = ensure_enabled(&s, "nonsense").unwrap_err().to_string();
+        assert!(err.contains("unknown service `nonsense`"));
+        assert!(err.contains("postgres"));
+    }
+}
