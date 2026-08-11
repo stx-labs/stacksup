@@ -136,6 +136,9 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<()> {
         let size = job.size.map_or("size unknown".into(), format_bytes);
         println!("  {:<12} {name}  ({size})", kind_name(job.kind));
 
+        if job.kind == Kind::Api {
+            pg_verdict(job, deployment, &mut version_problem);
+        }
         match version_verdict(job) {
             VersionVerdict::Ok(a, c) => {
                 println!("    {}", format!("archive {a} ≤ configured {c} ✓").green())
@@ -461,6 +464,47 @@ fn pinned_job(
 // ---------------------------------------------------------------------------
 // Version validation
 
+/// API dumps are produced by a specific postgres major (it's in the archive
+/// name); pg_restore into an OLDER server is not supported. Same ladder as
+/// the service check: explicit tag settles it, floating tags consult the
+/// pulled image, unknown warns.
+fn pg_verdict(job: &Job, deployment: &Deployment, version_problem: &mut bool) {
+    let archive_pg = job
+        .file
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .and_then(|n| parse_pg_major_from_name(&n));
+    let pg_image = crate::utils::services::postgres_image(deployment);
+    match classify_version(archive_pg.as_deref(), &image_tag(&pg_image), || {
+        pulled_image_version(&pg_image)
+    }) {
+        VersionVerdict::Ok(a, c) => {
+            println!(
+                "    {}",
+                format!("archive postgres {a} ≤ deployed postgres {c} ✓").green()
+            )
+        }
+        VersionVerdict::TooNew(a, c) => {
+            println!(
+                "    {}",
+                format!(
+                    "✗ archive was dumped by postgres {a}, newer than deployed postgres {c} — \
+                     pg_restore into an older server is not supported.\n    Fix: raise [postgres] \
+                     version in stacks.toml, or pick an older archive with --archive."
+                )
+                .red()
+            );
+            *version_problem = true;
+        }
+        VersionVerdict::Unknown(reason) => {
+            println!(
+                "    {}",
+                format!("⚠ cannot verify postgres compatibility: {reason}").yellow()
+            )
+        }
+    }
+}
+
 enum VersionVerdict {
     Ok(String, String),
     TooNew(String, String),
@@ -562,6 +606,18 @@ fn parse_version_from_name(name: &str, _kind: Kind) -> Option<Vec<u64>> {
             }
         })
         .next()
+}
+
+/// The postgres major that produced an API dump:
+/// `stacks-blockchain-api-pg-17-9.0.2-20260803.dump` -> [17].
+fn parse_pg_major_from_name(name: &str) -> Option<Vec<u64>> {
+    let mut parts = name.split('-');
+    while let Some(seg) = parts.next() {
+        if seg == "pg" {
+            return parts.next().and_then(parse_version);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,6 +1177,23 @@ mod tests {
         // `latest` falls back to the pulled image
         let v = classify_version(Some(&[9, 0, 2]), "latest", || Some(vec![9, 0, 2]));
         assert!(matches!(v, VersionVerdict::Ok(..)));
+    }
+
+    #[test]
+    fn parses_pg_major_from_api_dumps() {
+        assert_eq!(
+            parse_pg_major_from_name("stacks-blockchain-api-pg-17-9.0.2-20260811.dump"),
+            Some(vec![17])
+        );
+        assert_eq!(
+            parse_pg_major_from_name("stacks-blockchain-api-pg-17-latest.dump"),
+            Some(vec![17])
+        );
+        // node archives carry no pg segment
+        assert_eq!(
+            parse_pg_major_from_name("testnet-stacks-blockchain-4.0.1-20260811.tar.zst"),
+            None
+        );
     }
 
     #[test]
