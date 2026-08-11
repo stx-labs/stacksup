@@ -256,7 +256,9 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     }
 
     println!("\n{}", "Done.".green());
-    println!("Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up.");
+    println!(
+        "Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up."
+    );
     Ok(())
 }
 

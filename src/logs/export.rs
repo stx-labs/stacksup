@@ -99,7 +99,8 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
             "stacks-tool version: {}\nnetwork: {network}\ncreated: {ts}\ndocker: {}\ncompose: {}\nservices: {}\n",
             env!("CARGO_PKG_VERSION"),
             crate::utils::docker::daemon_version().unwrap_or_else(|e| format!("unavailable ({e})")),
-            crate::utils::docker::compose_version().unwrap_or_else(|e| format!("unavailable ({e})")),
+            crate::utils::docker::compose_version()
+                .unwrap_or_else(|e| format!("unavailable ({e})")),
             services.join(", "),
         );
         fs::write(tmp.join("meta.txt"), meta)?;
