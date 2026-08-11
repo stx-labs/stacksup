@@ -6,6 +6,9 @@
 //!     health-checked by `doctor`/`status`, and never touched by `down`
 //!   - `disabled`: absent; anything that requires it fails validation
 
+pub mod check;
+pub mod render;
+
 use std::fmt;
 use std::path::Path;
 

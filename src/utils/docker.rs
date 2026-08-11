@@ -8,9 +8,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
+use crate::config::render::{COMPOSE_PROJECT, compose_file};
 use crate::config::{ServiceMode, Stack};
-use crate::render::{COMPOSE_PROJECT, compose_file};
-use crate::services::roster;
+use crate::utils::services::roster;
 
 fn compose(data_dir: &Path) -> Command {
     let mut cmd = Command::new("docker");
@@ -292,8 +292,10 @@ pub fn restart(stack: &Stack, data_dir: &Path, service: Option<&str>) -> Result<
         return Ok(());
     }
 
-    let enabled: Vec<_> =
-        roster(stack).into_iter().filter(|(_, m)| *m == ServiceMode::Enabled).collect();
+    let enabled: Vec<_> = roster(stack)
+        .into_iter()
+        .filter(|(_, m)| *m == ServiceMode::Enabled)
+        .collect();
     if enabled.is_empty() {
         bail!("no services are set to mode = \"enabled\" in stacks.toml — nothing to restart");
     }

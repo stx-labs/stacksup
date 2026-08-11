@@ -14,7 +14,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::config::{Network, ServiceMode, Stack};
-use crate::services::*;
+use crate::utils::services::*;
 
 pub const COMPOSE_PROJECT: &str = "stacks";
 

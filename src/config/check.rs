@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use colored::Colorize;
 
 use crate::config::{ServiceMode, Stack};
-use crate::services::*;
+use crate::utils::services::*;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -44,11 +44,11 @@ pub fn run(stack: &Stack) -> Result<()> {
         .iter()
         .any(|(_, m)| *m == ServiceMode::Enabled)
     {
-        match crate::docker::daemon_version() {
+        match crate::utils::docker::daemon_version() {
             Ok(v) => r.ok(&format!("docker daemon reachable (server {v})")),
             Err(e) => r.fail(&e.to_string()),
         }
-        match crate::docker::compose_version() {
+        match crate::utils::docker::compose_version() {
             Ok(v) => r.ok(&format!("docker compose plugin installed ({v})")),
             Err(e) => r.fail(&e.to_string()),
         }

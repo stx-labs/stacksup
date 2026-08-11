@@ -17,7 +17,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Network, ServiceMode, Stack};
-use crate::versions::*;
+use crate::utils::versions::*;
 
 const ARCHIVE_BASE: &str = "https://archive.hiro.so";
 
@@ -62,7 +62,7 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
         Network::Testnet => "testnet",
     };
 
-    if let Some(running) = crate::docker::running_services(data_dir) {
+    if let Some(running) = crate::utils::docker::running_services(data_dir) {
         if !running.is_empty() {
             bail!(
                 "the stack is running ({}) — run `stacksup stop` first",
@@ -256,7 +256,9 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     }
 
     println!("\n{}", "Done.".green());
-    println!("Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up.");
+    println!(
+        "Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up."
+    );
     Ok(())
 }
 
@@ -293,8 +295,8 @@ fn versioned_job(
     let url = format!("{base}/{name}");
     let size = head_content_length(&url).with_context(|| format!("archive not found at {url}"))?;
     let image = match kind {
-        Kind::Node => crate::services::stacks_node_image(stack),
-        Kind::Api => crate::services::stacks_api_image(stack),
+        Kind::Node => crate::utils::services::stacks_node_image(stack),
+        Kind::Api => crate::utils::services::stacks_api_image(stack),
     };
     Ok(Job {
         kind,
@@ -380,8 +382,8 @@ fn pinned_job(
     downloads: &Path,
 ) -> Result<Job> {
     let image = match kind {
-        Kind::Node => crate::services::stacks_node_image(stack),
-        Kind::Api => crate::services::stacks_api_image(stack),
+        Kind::Node => crate::utils::services::stacks_node_image(stack),
+        Kind::Api => crate::utils::services::stacks_api_image(stack),
     };
 
     // Local file?
@@ -866,7 +868,7 @@ fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path
     let user = stack.postgres.user.as_deref().unwrap_or("postgres");
 
     println!("Starting postgres...");
-    crate::docker::compose_up_service(data_dir, "postgres")?;
+    crate::utils::docker::compose_up_service(data_dir, "postgres")?;
     for _ in 0..60 {
         let ready = Command::new("docker")
             .args(["exec", "stacks-postgres", "pg_isready", "-U", user])
@@ -930,7 +932,7 @@ fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path
     let verdict = crate::chainstate::status(stack, data_dir);
 
     println!("Stopping postgres...");
-    crate::docker::compose_stop_service(data_dir, "postgres")?;
+    crate::utils::docker::compose_stop_service(data_dir, "postgres")?;
     verdict
 }
 
