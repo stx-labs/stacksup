@@ -1,11 +1,10 @@
-//! `stacksup logs export` — package logs (and diagnostic context) into a
-//! shareable file for troubleshooting.
+//! `stacksup logs export` — package logs (and diagnostic context) into a shareable file for
+//! troubleshooting.
 //!
-//! Default output is a support bundle: per-service logs plus versions, ps,
-//! images, redacted configs, and the chainstate/config check reports. All
-//! text passes through redaction (known secret values + password/token/key
-//! lines) so the artifact is safe to hand to someone else — though the final
-//! message still tells the user to review it.
+//! Default output is a support bundle: per-service logs plus versions, ps, images, redacted
+//! configs, and the chainstate/config check reports. All text passes through redaction (known
+//! secret values + password/token/key lines) so the artifact is safe to hand to someone else —
+//! though the final message still tells the user to review it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +13,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use crate::config::{ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 use crate::utils::services::roster;
 
 pub struct Opts {
@@ -24,15 +23,15 @@ pub struct Opts {
     pub out: Option<PathBuf>,
 }
 
-pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Result<()> {
+pub fn run(deployment: &Deployment, config_path: &Path, data_dir: &Path, opts: Opts) -> Result<()> {
     crate::utils::docker::preflight(data_dir)?;
 
     let services: Vec<String> = match &opts.service {
         Some(name) => {
-            crate::utils::docker::ensure_enabled(stack, name)?;
+            crate::utils::docker::ensure_enabled(deployment, name)?;
             vec![name.clone()]
         }
-        None => roster(stack)
+        None => roster(deployment)
             .into_iter()
             .filter(|(_, m)| *m == ServiceMode::Enabled)
             .map(|(n, _)| n.to_string())
@@ -57,9 +56,9 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         );
     }
 
-    let secrets = secret_values(stack);
+    let secrets = secret_values(deployment);
     let ts = timestamp();
-    let network = stack.network;
+    let network = deployment.network.as_str();
 
     // Single service + --logs-only: a plain .log file, no archive.
     if opts.logs_only && services.len() == 1 {
@@ -216,11 +215,11 @@ fn self_report(config_path: &Path, data_dir: &Path, args: &[&str]) -> String {
 
 /// Secret *values* known from the config, scrubbed wherever they appear
 /// (configs and logs alike — the node echoes config at startup).
-fn secret_values(stack: &Stack) -> Vec<String> {
+fn secret_values(deployment: &Deployment) -> Vec<String> {
     let mut v: Vec<String> = [
-        stack.postgres.password.clone(),
-        stack.bitcoind.rpc_password.clone(),
-        stack.stacks_node.auth_token.clone(),
+        deployment.postgres.password.clone(),
+        deployment.bitcoind.rpc_password.clone(),
+        deployment.stacks_node.auth_token.clone(),
     ]
     .into_iter()
     .flatten()

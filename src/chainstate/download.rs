@@ -16,7 +16,7 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 
-use crate::config::{Network, ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 use crate::utils::versions::*;
 
 const ARCHIVE_BASE: &str = "https://archive.hiro.so";
@@ -56,11 +56,15 @@ struct Job {
     image: String,
 }
 
-pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
-    let network = match stack.network {
-        Network::Mainnet => "mainnet",
-        Network::Testnet => "testnet",
-    };
+pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<()> {
+    let network = deployment.net.hiro_archive_path.clone().with_context(|| {
+        format!(
+            "network `{}` has no published archives (no hiro_archive_path in its definition) — \
+             use --archive to point at a file explicitly",
+            deployment.network
+        )
+    })?;
+    let network = network.as_str();
 
     if let Some(running) = crate::utils::docker::running_services(data_dir)
         && !running.is_empty()
@@ -78,17 +82,20 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
     let mut jobs: Vec<Job> = Vec::new();
 
     let want_node = matches!(opts.service, ServiceSel::Node | ServiceSel::All)
-        && stack.stacks_node.mode == ServiceMode::Enabled;
+        && deployment.stacks_node.mode == ServiceMode::Enabled;
     let want_api = matches!(opts.service, ServiceSel::Api | ServiceSel::All)
-        && stack.stacks_api.mode == ServiceMode::Enabled;
+        && deployment.stacks_api.mode == ServiceMode::Enabled;
 
-    if matches!(opts.service, ServiceSel::Node) && stack.stacks_node.mode != ServiceMode::Enabled {
+    if matches!(opts.service, ServiceSel::Node)
+        && deployment.stacks_node.mode != ServiceMode::Enabled
+    {
         bail!("[stacks-node] is not enabled in stacks.toml");
     }
-    if matches!(opts.service, ServiceSel::Api) && stack.stacks_api.mode != ServiceMode::Enabled {
+    if matches!(opts.service, ServiceSel::Api) && deployment.stacks_api.mode != ServiceMode::Enabled
+    {
         bail!("[stacks-api] is not enabled in stacks.toml");
     }
-    if want_api && stack.postgres.mode != ServiceMode::Enabled {
+    if want_api && deployment.postgres.mode != ServiceMode::Enabled {
         bail!(
             "restoring the API archive needs the managed postgres ([postgres] mode = \"enabled\")"
         );
@@ -101,13 +108,19 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
         } else {
             Kind::Api
         };
-        jobs.push(pinned_job(kind, archive, network, stack, &downloads_dir)?);
+        jobs.push(pinned_job(
+            kind,
+            archive,
+            network,
+            deployment,
+            &downloads_dir,
+        )?);
     } else {
         if want_node {
-            jobs.push(latest_node_job(network, stack, &downloads_dir)?);
+            jobs.push(latest_node_job(network, deployment, &downloads_dir)?);
         }
         if want_api {
-            jobs.push(latest_api_job(network, stack, &downloads_dir)?);
+            jobs.push(latest_api_job(network, deployment, &downloads_dir)?);
         }
     }
 
@@ -246,8 +259,8 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
         }
 
         match job.kind {
-            Kind::Node => restore_node(&job.file, stack, data_dir)?,
-            Kind::Api => restore_api(&job.file, stack, data_dir, &downloads_dir)?,
+            Kind::Node => restore_node(&job.file, deployment, data_dir)?,
+            Kind::Api => restore_api(&job.file, deployment, data_dir, &downloads_dir)?,
         }
 
         if !opts.keep_archives && job.url.is_some() {
@@ -269,34 +282,34 @@ pub fn run(stack: &Stack, data_dir: &Path, opts: Opts) -> Result<()> {
 /// use the `-latest` objects: they are byte-identical pointers to the newest
 /// dated archive but carry no version in their name, which would defeat the
 /// archive-version ≤ configured-version check.
-fn latest_node_job(network: &str, stack: &Stack, downloads: &Path) -> Result<Job> {
+fn latest_node_job(network: &str, deployment: &Deployment, downloads: &Path) -> Result<Job> {
     let base = format!("{ARCHIVE_BASE}/{network}/stacks-blockchain");
     let name = newest_in_listing(
         &base,
         &format!("{network}-stacks-blockchain-"),
         &[".tar.zst", ".tar.gz"],
     )?;
-    versioned_job(Kind::Node, &base, &name, stack, downloads)
+    versioned_job(Kind::Node, &base, &name, deployment, downloads)
 }
 
-fn latest_api_job(network: &str, stack: &Stack, downloads: &Path) -> Result<Job> {
+fn latest_api_job(network: &str, deployment: &Deployment, downloads: &Path) -> Result<Job> {
     let base = format!("{ARCHIVE_BASE}/{network}/stacks-blockchain-api-pg");
     let name = newest_in_listing(&base, "stacks-blockchain-api-pg-", &[".dump"])?;
-    versioned_job(Kind::Api, &base, &name, stack, downloads)
+    versioned_job(Kind::Api, &base, &name, deployment, downloads)
 }
 
 fn versioned_job(
     kind: Kind,
     base: &str,
     name: &str,
-    stack: &Stack,
+    deployment: &Deployment,
     downloads: &Path,
 ) -> Result<Job> {
     let url = format!("{base}/{name}");
     let size = head_content_length(&url).with_context(|| format!("archive not found at {url}"))?;
     let image = match kind {
-        Kind::Node => crate::utils::services::stacks_node_image(stack),
-        Kind::Api => crate::utils::services::stacks_api_image(stack),
+        Kind::Node => crate::utils::services::stacks_node_image(deployment),
+        Kind::Api => crate::utils::services::stacks_api_image(deployment),
     };
     Ok(Job {
         kind,
@@ -378,12 +391,12 @@ fn pinned_job(
     kind: Kind,
     archive: &str,
     network: &str,
-    stack: &Stack,
+    deployment: &Deployment,
     downloads: &Path,
 ) -> Result<Job> {
     let image = match kind {
-        Kind::Node => crate::utils::services::stacks_node_image(stack),
-        Kind::Api => crate::utils::services::stacks_api_image(stack),
+        Kind::Node => crate::utils::services::stacks_node_image(deployment),
+        Kind::Api => crate::utils::services::stacks_api_image(deployment),
     };
 
     // Local file?
@@ -786,11 +799,8 @@ fn sha256_file(path: &Path) -> Result<String> {
 // ---------------------------------------------------------------------------
 // Restore: node
 
-fn restore_node(archive: &Path, stack: &Stack, data_dir: &Path) -> Result<()> {
-    let mode = match stack.network {
-        Network::Mainnet => "mainnet",
-        Network::Testnet => "krypton",
-    };
+fn restore_node(archive: &Path, deployment: &Deployment, data_dir: &Path) -> Result<()> {
+    let mode = deployment.net.node.burnchain_mode.as_str();
     let target_root = data_dir.join("chainstate/stacks-node");
     let tmp = data_dir.join("chainstate/.restore-tmp");
     let _ = fs::remove_dir_all(&tmp);
@@ -846,7 +856,12 @@ fn restore_node(archive: &Path, stack: &Stack, data_dir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Restore: API (pg_restore into the managed postgres)
 
-fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path) -> Result<()> {
+fn restore_api(
+    dump: &Path,
+    deployment: &Deployment,
+    data_dir: &Path,
+    downloads_dir: &Path,
+) -> Result<()> {
     // pg_restore --jobs needs a seekable file inside the container; the
     // postgres service mounts <data-dir>/downloads at /downloads (read-only).
     let dump = if dump.starts_with(downloads_dir) {
@@ -864,7 +879,7 @@ fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path
         "/downloads/{}",
         dump.file_name().unwrap_or_default().to_string_lossy()
     );
-    let user = stack.postgres.user.as_deref().unwrap_or("postgres");
+    let user = deployment.postgres.user.as_deref().unwrap_or("postgres");
 
     println!("Starting postgres...");
     crate::utils::docker::compose_up_service(data_dir, "postgres")?;
@@ -928,7 +943,7 @@ fn restore_api(dump: &Path, stack: &Stack, data_dir: &Path, downloads_dir: &Path
 
     // While postgres is still up, check tip consistency against the node.
     println!("\nChecking chain tip consistency:");
-    let verdict = crate::chainstate::status(stack, data_dir);
+    let verdict = crate::chainstate::status(deployment, data_dir);
 
     println!("Stopping postgres...");
     crate::utils::docker::compose_stop_service(data_dir, "postgres")?;

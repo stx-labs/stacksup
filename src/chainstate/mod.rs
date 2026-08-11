@@ -10,7 +10,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use crate::config::{Network, ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 
 /// One service's view of the chain: (stacks height, bitcoin height).
 struct Tip {
@@ -27,18 +27,21 @@ struct Tip {
 /// the node's tips are read straight from its sqlite files (safe read-only
 /// even while the node writes), while the API's tip lives in Postgres and
 /// bitcoind's in LevelDB — those two are only checkable while running.
-pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
+pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     let running = crate::utils::docker::running_services(data_dir).unwrap_or_default();
     let mut tips: Vec<Tip> = Vec::new();
 
-    if stack.stacks_node.mode == ServiceMode::Enabled {
-        tips.push(node_tip(stack, data_dir));
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
+        tips.push(node_tip(deployment, data_dir));
     }
-    if stack.bitcoind.mode == ServiceMode::Enabled {
-        tips.push(bitcoind_tip(stack, running.iter().any(|s| s == "bitcoind")));
+    if deployment.bitcoind.mode == ServiceMode::Enabled {
+        tips.push(bitcoind_tip(
+            deployment,
+            running.iter().any(|s| s == "bitcoind"),
+        ));
     }
-    if stack.stacks_api.mode == ServiceMode::Enabled {
-        tips.push(api_tip(stack, running.iter().any(|s| s == "postgres")));
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
+        tips.push(api_tip(deployment, running.iter().any(|s| s == "postgres")));
     }
 
     if tips.is_empty() {
@@ -120,11 +123,8 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
 /// epoch2 block_headers) — NOT the sortition snapshot's
 /// canonical_stacks_tip_height, which only advances per *burn* block and so
 /// lags by up to a tenure's worth of stacks blocks post-Nakamoto.
-fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
-    let mode = match stack.network {
-        Network::Mainnet => "mainnet",
-        Network::Testnet => "krypton",
-    };
+fn node_tip(deployment: &Deployment, data_dir: &Path) -> Tip {
+    let mode = deployment.net.node.burnchain_mode.as_str();
     let node_dir = data_dir.join("chainstate/stacks-node").join(mode);
     let sort_db = node_dir.join("burnchain/sortition/marf.sqlite");
     let headers_db = node_dir.join("chainstate/vm/index.sqlite");
@@ -182,7 +182,7 @@ fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
 
 /// bitcoind's own height via bitcoin-cli inside the running container.
 /// Offline its state is LevelDB, which we don't parse.
-fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
+fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
     let mut tip = Tip {
         service: "bitcoind",
         source: "bitcoin-cli (running container)".into(),
@@ -195,11 +195,7 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
             Some("bitcoind is not running — height in LevelDB is not readable offline".into());
         return tip;
     }
-    let chain = if stack.network == Network::Mainnet {
-        "main"
-    } else {
-        "test"
-    };
+    let chain = deployment.net.bitcoind.chain.as_str();
     let out = Command::new("docker")
         .args([
             "exec",
@@ -208,11 +204,15 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
             &format!("-chain={chain}"),
             &format!(
                 "-rpcuser={}",
-                stack.bitcoind.rpc_user.as_deref().unwrap_or("stacks")
+                deployment.bitcoind.rpc_user.as_deref().unwrap_or("stacks")
             ),
             &format!(
                 "-rpcpassword={}",
-                stack.bitcoind.rpc_password.as_deref().unwrap_or("stacks")
+                deployment
+                    .bitcoind
+                    .rpc_password
+                    .as_deref()
+                    .unwrap_or("stacks")
             ),
             "getblockcount",
         ])
@@ -234,7 +234,7 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
 
 /// The API's indexed tip from its Postgres chain_tip table (single-row table
 /// with block_height and burn_block_height). Needs the postgres server up.
-fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
+fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
     let mut tip = Tip {
         service: "stacks-api",
         source: "postgres chain_tip table".into(),
@@ -242,7 +242,7 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
         bitcoin: None,
         note: None,
     };
-    if stack.postgres.mode != ServiceMode::Enabled {
+    if deployment.postgres.mode != ServiceMode::Enabled {
         tip.note = Some("API uses an external/disabled postgres — not checked by this tool".into());
         return tip;
     }
@@ -250,7 +250,7 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
         tip.note = Some("postgres is not running — `stacksup start` to check the API's tip".into());
         return tip;
     }
-    let user = stack.postgres.user.as_deref().unwrap_or("postgres");
+    let user = deployment.postgres.user.as_deref().unwrap_or("postgres");
     let out = Command::new("docker")
         .args([
             "exec",
@@ -379,8 +379,8 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn stack(toml_str: &str) -> Stack {
-        toml::from_str(toml_str).expect("test stack.toml should parse")
+    fn deployment(toml_str: &str) -> Deployment {
+        crate::config::test_deployment(toml_str)
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -429,7 +429,7 @@ mod tests {
     fn node_tip_reads_headers_db_not_sortition_snapshot() {
         let dir = temp_dir("tip");
         write_node_dbs(&dir, 3026, 10602);
-        let s = stack("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let s = deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
         let tip = node_tip(&s, &dir);
         assert_eq!(tip.bitcoin, Some(3026));
         // stacks height must come from the headers db (the sortition snapshot
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn node_tip_without_dbs_reports_note() {
         let dir = temp_dir("empty");
-        let s = stack("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let s = deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
         let tip = node_tip(&s, &dir);
         assert_eq!(tip.stacks, None);
         assert!(tip.note.unwrap().contains("has the node run yet"));

@@ -21,6 +21,16 @@ stacksup chainstate status # compare every service's chain tip (stacks + bitcoin
 stacksup chainstate download # seed chainstate from the Hiro Archive (resumable, verified)
 ```
 
+## Networks
+
+Standard network definitions (burnchain endpoint, chain id, epochs, seeded
+balances, bootstrap peers) live in [`networks/`](networks/) and ship embedded
+in the binary — `network = "testnet"` in stacks.toml references them by name.
+A new testnet (new chain id, new epochs) is a new file there, not a config
+migration. Unknown names resolve as custom definition files next to your
+stacks.toml (`networks/<name>.toml`), so you can define private networks
+without a tool release.
+
 ## The model
 
 `stacks.toml` is the single source of truth. Every service has a `mode`:

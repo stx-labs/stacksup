@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 
-use crate::config::{ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 use crate::utils::versions::*;
 
 struct Row {
@@ -25,37 +25,37 @@ struct Row {
     error: Option<String>,
 }
 
-pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
+pub fn run(deployment: &Deployment, service: Option<&str>) -> Result<()> {
     let targets: Vec<(&'static str, ServiceMode, String)> = [
         (
             "bitcoind",
-            stack.bitcoind.mode,
-            crate::utils::services::bitcoind_image(stack),
+            deployment.bitcoind.mode,
+            crate::utils::services::bitcoind_image(deployment),
         ),
         (
             "stacks-node",
-            stack.stacks_node.mode,
-            crate::utils::services::stacks_node_image(stack),
+            deployment.stacks_node.mode,
+            crate::utils::services::stacks_node_image(deployment),
         ),
         (
             "stacks-signer",
-            stack.stacks_signer.mode,
-            crate::utils::services::stacks_signer_image(stack),
+            deployment.stacks_signer.mode,
+            crate::utils::services::stacks_signer_image(deployment),
         ),
         (
             "stacks-api",
-            stack.stacks_api.mode,
-            crate::utils::services::stacks_api_image(stack),
+            deployment.stacks_api.mode,
+            crate::utils::services::stacks_api_image(deployment),
         ),
         (
             "stacks-mesh-api",
-            stack.stacks_mesh_api.mode,
-            crate::utils::services::stacks_mesh_api_image(stack),
+            deployment.stacks_mesh_api.mode,
+            crate::utils::services::stacks_mesh_api_image(deployment),
         ),
         (
             "postgres",
-            stack.postgres.mode,
-            crate::utils::services::postgres_image(stack),
+            deployment.postgres.mode,
+            crate::utils::services::postgres_image(deployment),
         ),
     ]
     .into_iter()

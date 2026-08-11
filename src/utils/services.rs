@@ -1,6 +1,6 @@
 //! Per-service constants: images, ports, compose names.
 
-use crate::config::{Network, ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 
 // Image repositories and the default tag used when a service section has no `version`.
 const REPO_BITCOIND: (&str, &str) = ("bitcoin/bitcoin", "latest");
@@ -14,31 +14,34 @@ fn image((repo, default_tag): (&str, &str), version: Option<&str>) -> String {
     format!("{repo}:{}", version.unwrap_or(default_tag))
 }
 
-pub fn bitcoind_image(stack: &Stack) -> String {
-    image(REPO_BITCOIND, stack.bitcoind.version.as_deref())
+pub fn bitcoind_image(deployment: &Deployment) -> String {
+    image(REPO_BITCOIND, deployment.bitcoind.version.as_deref())
 }
 
-pub fn stacks_node_image(stack: &Stack) -> String {
-    image(REPO_STACKS_NODE, stack.stacks_node.version.as_deref())
+pub fn stacks_node_image(deployment: &Deployment) -> String {
+    image(REPO_STACKS_NODE, deployment.stacks_node.version.as_deref())
 }
 
-pub fn stacks_signer_image(stack: &Stack) -> String {
-    image(REPO_STACKS_SIGNER, stack.stacks_signer.version.as_deref())
-}
-
-pub fn stacks_api_image(stack: &Stack) -> String {
-    image(REPO_STACKS_API, stack.stacks_api.version.as_deref())
-}
-
-pub fn stacks_mesh_api_image(stack: &Stack) -> String {
+pub fn stacks_signer_image(deployment: &Deployment) -> String {
     image(
-        REPO_STACKS_MESH_API,
-        stack.stacks_mesh_api.version.as_deref(),
+        REPO_STACKS_SIGNER,
+        deployment.stacks_signer.version.as_deref(),
     )
 }
 
-pub fn postgres_image(stack: &Stack) -> String {
-    image(REPO_POSTGRES, stack.postgres.version.as_deref())
+pub fn stacks_api_image(deployment: &Deployment) -> String {
+    image(REPO_STACKS_API, deployment.stacks_api.version.as_deref())
+}
+
+pub fn stacks_mesh_api_image(deployment: &Deployment) -> String {
+    image(
+        REPO_STACKS_MESH_API,
+        deployment.stacks_mesh_api.version.as_deref(),
+    )
+}
+
+pub fn postgres_image(deployment: &Deployment) -> String {
+    image(REPO_POSTGRES, deployment.postgres.version.as_deref())
 }
 
 pub const NODE_RPC_PORT: u16 = 20443;
@@ -49,87 +52,86 @@ pub const MESH_API_PORT: u16 = 3998;
 pub const SIGNER_ENDPOINT_PORT: u16 = 30000;
 pub const POSTGRES_PORT: u16 = 5432;
 
-// Non-mainnet networks are bitcoin *regtest* (krypton testnet follows the
-// Hiro-hosted regtest), hence the 18443/18444 regtest ports.
-pub fn bitcoind_rpc_port(network: Network) -> u16 {
-    match network {
-        Network::Mainnet => 8332,
-        _ => 18443,
-    }
+/// bitcoind ports: per-stack override, else the network definition's default.
+pub fn bitcoind_rpc_port(deployment: &Deployment) -> u16 {
+    deployment
+        .bitcoind
+        .rpc_port
+        .unwrap_or(deployment.net.bitcoind.rpc_port)
 }
 
-pub fn bitcoind_p2p_port(network: Network) -> u16 {
-    match network {
-        Network::Mainnet => 8333,
-        _ => 18444,
-    }
+pub fn bitcoind_p2p_port(deployment: &Deployment) -> u16 {
+    deployment
+        .bitcoind
+        .p2p_port
+        .unwrap_or(deployment.net.bitcoind.p2p_port)
 }
 
 /// Hostname of a service as seen by *managed* services: the compose DNS name
 /// when managed, the user-supplied host when external.
-pub fn bitcoind_host(stack: &Stack) -> Option<String> {
-    match stack.bitcoind.mode {
+pub fn bitcoind_host(deployment: &Deployment) -> Option<String> {
+    match deployment.bitcoind.mode {
         ServiceMode::Enabled => Some("bitcoind".into()),
-        ServiceMode::External => stack.bitcoind.host.clone(),
+        ServiceMode::External => deployment.bitcoind.host.clone(),
         ServiceMode::Disabled => None,
     }
 }
 
-pub fn node_rpc_host(stack: &Stack) -> Option<String> {
-    match stack.stacks_node.mode {
+pub fn node_rpc_host(deployment: &Deployment) -> Option<String> {
+    match deployment.stacks_node.mode {
         ServiceMode::Enabled => Some("stacks-node".into()),
-        ServiceMode::External => stack.stacks_node.rpc_host.clone(),
+        ServiceMode::External => deployment.stacks_node.rpc_host.clone(),
         ServiceMode::Disabled => None,
     }
 }
 
-pub fn node_rpc_port(stack: &Stack) -> u16 {
-    stack.stacks_node.rpc_port.unwrap_or(NODE_RPC_PORT)
+pub fn node_rpc_port(deployment: &Deployment) -> u16 {
+    deployment.stacks_node.rpc_port.unwrap_or(NODE_RPC_PORT)
 }
 
-pub fn postgres_host(stack: &Stack) -> Option<String> {
-    match stack.postgres.mode {
+pub fn postgres_host(deployment: &Deployment) -> Option<String> {
+    match deployment.postgres.mode {
         ServiceMode::Enabled => Some("postgres".into()),
-        ServiceMode::External => stack.postgres.host.clone(),
+        ServiceMode::External => deployment.postgres.host.clone(),
         ServiceMode::Disabled => None,
     }
 }
 
-pub fn postgres_port(stack: &Stack) -> u16 {
-    stack.postgres.port.unwrap_or(POSTGRES_PORT)
+pub fn postgres_port(deployment: &Deployment) -> u16 {
+    deployment.postgres.port.unwrap_or(POSTGRES_PORT)
 }
 
 /// All services with their mode, for status/doctor display.
-pub fn roster(stack: &Stack) -> Vec<(&'static str, ServiceMode)> {
+pub fn roster(deployment: &Deployment) -> Vec<(&'static str, ServiceMode)> {
     vec![
-        ("bitcoind", stack.bitcoind.mode),
-        ("stacks-node", stack.stacks_node.mode),
-        ("stacks-signer", stack.stacks_signer.mode),
-        ("stacks-api", stack.stacks_api.mode),
-        ("stacks-mesh-api", stack.stacks_mesh_api.mode),
-        ("postgres", stack.postgres.mode),
+        ("bitcoind", deployment.bitcoind.mode),
+        ("stacks-node", deployment.stacks_node.mode),
+        ("stacks-signer", deployment.stacks_signer.mode),
+        ("stacks-api", deployment.stacks_api.mode),
+        ("stacks-mesh-api", deployment.stacks_mesh_api.mode),
+        ("postgres", deployment.postgres.mode),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Stack;
+    use crate::config::Deployment;
 
-    fn stack(toml_str: &str) -> Stack {
-        toml::from_str(toml_str).expect("test stack.toml should parse")
+    fn deployment(toml_str: &str) -> Deployment {
+        crate::config::test_deployment(toml_str)
     }
 
     #[test]
     fn image_uses_default_tag_when_version_unset() {
-        let s = stack("network = \"testnet\"");
+        let s = deployment("network = \"testnet\"");
         assert!(stacks_node_image(&s).ends_with(":latest"));
         assert!(postgres_image(&s).starts_with("postgres:"));
     }
 
     #[test]
     fn image_uses_configured_version() {
-        let s = stack(
+        let s = deployment(
             "network = \"testnet\"\n[stacks-node]\nversion = \"4.0.1\"\n[postgres]\nversion = \"17\"",
         );
         assert!(stacks_node_image(&s).ends_with(":4.0.1"));
@@ -137,17 +139,23 @@ mod tests {
     }
 
     #[test]
-    fn bitcoind_ports_per_network() {
-        assert_eq!(bitcoind_rpc_port(Network::Mainnet), 8332);
-        assert_eq!(bitcoind_p2p_port(Network::Mainnet), 8333);
-        // non-mainnet is the Hiro-hosted regtest, hence regtest ports
-        assert_eq!(bitcoind_rpc_port(Network::Testnet), 18443);
-        assert_eq!(bitcoind_p2p_port(Network::Testnet), 18444);
+    fn bitcoind_ports_come_from_network_def() {
+        let mainnet = deployment("network = \"mainnet\"");
+        assert_eq!(bitcoind_rpc_port(&mainnet), 8332);
+        assert_eq!(bitcoind_p2p_port(&mainnet), 8333);
+        // testnet follows the Hiro-hosted regtest, hence regtest ports
+        let testnet = deployment("network = \"testnet\"");
+        assert_eq!(bitcoind_rpc_port(&testnet), 18443);
+        assert_eq!(bitcoind_p2p_port(&testnet), 18444);
+        // per-stack override wins
+        let custom =
+            deployment("network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\nrpc_port = 9999");
+        assert_eq!(bitcoind_rpc_port(&custom), 9999);
     }
 
     #[test]
     fn hosts_follow_service_mode() {
-        let s = stack(
+        let s = deployment(
             "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"10.0.1.6\"",
         );
         assert_eq!(bitcoind_host(&s), Some("bitcoind".into()));
@@ -157,7 +165,7 @@ mod tests {
 
     #[test]
     fn port_overrides_apply() {
-        let s = stack(
+        let s = deployment(
             "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\nrpc_port = 30443\n[postgres]\nmode = \"enabled\"",
         );
         assert_eq!(node_rpc_port(&s), 30443);
@@ -167,7 +175,7 @@ mod tests {
     #[test]
     fn roster_lists_all_services_with_modes() {
         use crate::config::ServiceMode;
-        let s = stack("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        let s = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
         let roster = roster(&s);
         assert_eq!(roster.len(), 6);
         let (name, mode) = roster.iter().find(|(n, _)| *n == "postgres").unwrap();

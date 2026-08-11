@@ -7,30 +7,14 @@
 //!   - `disabled`: absent; anything that requires it fails validation
 
 pub mod check;
+pub mod network;
 pub mod render;
 
-use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Network {
-    Mainnet,
-    Testnet,
-}
-
-impl fmt::Display for Network {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Network::Mainnet => write!(f, "mainnet"),
-            Network::Testnet => write!(f, "testnet"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -52,8 +36,15 @@ pub enum NodeRole {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Stack {
-    pub network: Network,
+/// The deployment configuration. This is the root of the configuration and contains all the
+/// services and their configurations.
+pub struct Deployment {
+    /// Network name: a built-in definition (mainnet, testnet) or a custom definition file resolved
+    /// relative to stacks.toml.
+    pub network: String,
+    /// The resolved definition; populated by `load()` after parsing.
+    #[serde(skip)]
+    pub net: network::NetworkDef,
     #[serde(default)]
     pub bitcoind: Bitcoind,
     #[serde(default, rename = "stacks-node")]
@@ -150,30 +141,30 @@ pub struct Postgres {
     pub password: Option<String>,
 }
 
-impl Stack {
+impl Deployment {
     /// Cross-service validation: the rules that make invalid stacks fail at
     /// `up` time instead of becoming runtime mysteries.
     pub fn validate(&self) -> (Vec<String>, Vec<String>) {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        // Only a mainnet node needs its own bitcoind: krypton testnet follows
-        // the Hiro-hosted bitcoin regtest.
-        if self.network == Network::Mainnet
-            && self.stacks_node.mode == ServiceMode::Enabled
+        // A node needs a burnchain source: its own/external bitcoind, or the
+        // network's hosted default endpoint.
+        if self.stacks_node.mode == ServiceMode::Enabled
             && self.bitcoind.mode == ServiceMode::Disabled
+            && self.net.bitcoind.default_host.is_none()
         {
-            errors.push(
-                "a mainnet stacks-node requires bitcoind; set [bitcoind] mode = \"enabled\" or \"external\""
-                    .into(),
-            );
+            errors.push(format!(
+                "a {} stacks-node requires bitcoind; set [bitcoind] mode = \"enabled\" or \"external\"",
+                self.network
+            ));
         }
-        if self.network == Network::Testnet && self.bitcoind.mode == ServiceMode::Enabled {
-            errors.push(
-                "testnet (krypton) follows the Hiro-hosted bitcoin regtest — a locally managed \
-                 bitcoind cannot join it; set [bitcoind] mode = \"disabled\" (default endpoint) \
-                 or \"external\" to point at another krypton regtest"
-                    .into(),
-            );
+        if self.bitcoind.mode == ServiceMode::Enabled && !self.net.bitcoind.allow_managed {
+            errors.push(format!(
+                "network `{}` follows a hosted burnchain ({}) — a locally managed bitcoind \
+                 cannot join it; set [bitcoind] mode = \"disabled\" (hosted default) or \"external\"",
+                self.network,
+                self.net.bitcoind.default_host.as_deref().unwrap_or("hosted"),
+            ));
         }
 
         if self.bitcoind.mode == ServiceMode::External && self.bitcoind.host.is_none() {
@@ -259,7 +250,7 @@ impl Stack {
     }
 }
 
-pub fn load(path: &Path) -> Result<Stack> {
+pub fn load(path: &Path) -> Result<Deployment> {
     // `--config` accepts either the file itself or a directory containing one.
     let path = if path.is_dir() {
         path.join("stacks.toml")
@@ -272,10 +263,12 @@ pub fn load(path: &Path) -> Result<Stack> {
             path.display()
         )
     })?;
-    let stack: Stack =
+    let mut deployment: Deployment =
         toml::from_str(&raw).with_context(|| format!("invalid config in {}", path.display()))?;
+    let config_dir = path.parent().unwrap_or(Path::new("."));
+    deployment.net = network::load(&deployment.network, config_dir)?;
 
-    let (errors, warnings) = stack.validate();
+    let (errors, warnings) = deployment.validate();
     for w in &warnings {
         eprintln!("{}", format!("warning: {w}").yellow());
     }
@@ -285,7 +278,7 @@ pub fn load(path: &Path) -> Result<Stack> {
         }
         bail!("{} found {} config error(s)", path.display(), errors.len());
     }
-    Ok(stack)
+    Ok(deployment)
 }
 
 pub fn init(force: bool) -> Result<()> {
@@ -309,7 +302,7 @@ const DEFAULT_STACK_TOML: &str = r#"# stacksup config
 # Managed services also take a `version` — the docker image tag to run.
 # Omit it to use this tool's pinned default.
 
-network = "testnet" # mainnet | testnet
+network = "testnet" # mainnet | testnet | custom network definition file
 
 [bitcoind]
 # Only needed on mainnet. Testnet (krypton) follows the Hiro-hosted bitcoin
@@ -353,25 +346,33 @@ mode = "enabled"
 # password = "..."
 "#;
 
+/// Test helper: parse a stacks.toml string and resolve its (built-in) network.
+#[cfg(test)]
+pub fn test_deployment(toml_str: &str) -> Deployment {
+    let mut d: Deployment = toml::from_str(toml_str).expect("test stacks.toml should parse");
+    d.net = network::load(&d.network, Path::new(".")).expect("built-in network");
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn stack(toml_str: &str) -> Stack {
-        toml::from_str(toml_str).expect("test stack.toml should parse")
+    fn deployment(toml_str: &str) -> Deployment {
+        test_deployment(toml_str)
     }
 
     fn errors(toml_str: &str) -> Vec<String> {
-        stack(toml_str).validate().0
+        deployment(toml_str).validate().0
     }
 
     fn warnings(toml_str: &str) -> Vec<String> {
-        stack(toml_str).validate().1
+        deployment(toml_str).validate().1
     }
 
     #[test]
     fn init_template_is_valid_and_clean() {
-        let s: Stack = toml::from_str(DEFAULT_STACK_TOML).expect("template must parse");
+        let s = test_deployment(DEFAULT_STACK_TOML);
         let (errors, _) = s.validate();
         assert!(errors.is_empty(), "template has errors: {errors:?}");
     }
@@ -385,7 +386,7 @@ mod tests {
     #[test]
     fn testnet_rejects_managed_bitcoind() {
         let e = errors("network = \"testnet\"\n[bitcoind]\nmode = \"enabled\"");
-        assert!(e.iter().any(|m| m.contains("Hiro-hosted bitcoin regtest")));
+        assert!(e.iter().any(|m| m.contains("hosted burnchain")));
     }
 
     #[test]
