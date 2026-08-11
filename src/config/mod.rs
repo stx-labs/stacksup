@@ -64,6 +64,10 @@ pub struct Deployment {
 pub struct Bitcoind {
     #[serde(default)]
     pub mode: ServiceMode,
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// with `version`).
+    pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
     /// Required when mode = "external"
@@ -79,6 +83,10 @@ pub struct Bitcoind {
 pub struct StacksNode {
     #[serde(default)]
     pub mode: ServiceMode,
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// with `version`).
+    pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
     #[serde(default)]
@@ -97,6 +105,10 @@ pub struct StacksNode {
 pub struct StacksSigner {
     #[serde(default)]
     pub mode: ServiceMode,
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps
+    /// using `version`/the default tag, or a full ref with its own tag
+    /// (`myorg/stacks-node:4.0.1` — mutually exclusive with `version`).
+    pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
 }
@@ -106,6 +118,10 @@ pub struct StacksSigner {
 pub struct StacksApi {
     #[serde(default)]
     pub mode: ServiceMode,
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// with `version`).
+    pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
     /// Required when mode = "external": where the API serves HTTP
@@ -121,6 +137,10 @@ pub struct StacksApi {
 pub struct StacksMeshApi {
     #[serde(default)]
     pub mode: ServiceMode,
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// with `version`).
+    pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
     pub host: Option<String>,
@@ -132,6 +152,10 @@ pub struct StacksMeshApi {
 pub struct Postgres {
     #[serde(default)]
     pub mode: ServiceMode,
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// with `version`).
+    pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
     /// Required when mode = "external"
@@ -165,6 +189,41 @@ impl Deployment {
                 self.network,
                 self.net.bitcoind.default_host.as_deref().unwrap_or("hosted"),
             ));
+        }
+
+        // `image` with an explicit tag and `version` are two sources of truth
+        // for the same tag — reject the ambiguity.
+        for (name, image, version) in [
+            ("bitcoind", &self.bitcoind.image, &self.bitcoind.version),
+            (
+                "stacks-node",
+                &self.stacks_node.image,
+                &self.stacks_node.version,
+            ),
+            (
+                "stacks-signer",
+                &self.stacks_signer.image,
+                &self.stacks_signer.version,
+            ),
+            (
+                "stacks-api",
+                &self.stacks_api.image,
+                &self.stacks_api.version,
+            ),
+            (
+                "stacks-mesh-api",
+                &self.stacks_mesh_api.image,
+                &self.stacks_mesh_api.version,
+            ),
+            ("postgres", &self.postgres.image, &self.postgres.version),
+        ] {
+            if let (Some(image), Some(_)) = (image, version)
+                && crate::utils::versions::has_explicit_tag(image)
+            {
+                errors.push(format!(
+                    "[{name}] `image` already pins a tag (`{image}`) — remove `version` or drop the tag from `image`"
+                ));
+            }
         }
 
         if self.bitcoind.mode == ServiceMode::External && self.bitcoind.host.is_none() {
@@ -304,8 +363,11 @@ const DEFAULT_STACK_TOML: &str = r#"# stacksup config
 #   "external" — you run it elsewhere; we wire configs to it and health-check it
 #   "disabled" — not part of this stack
 #
-# Managed services also take a `version` — the docker image tag to run.
-# Omit it to use this tool's pinned default.
+# Managed services also take:
+#   `version` — the docker image tag to run (omit for this tool's default)
+#   `image`   — a custom docker image: a repository that keeps using
+#               `version`/the default tag, or a full ref with its own tag
+#               (then omit `version`)
 
 network = "testnet" # mainnet | testnet | custom network definition file
 
@@ -407,6 +469,22 @@ mod tests {
         assert!(
             e.iter()
                 .any(|m| m.contains("[postgres]") && m.contains("`host`"))
+        );
+    }
+
+    #[test]
+    fn image_with_tag_conflicts_with_version() {
+        let e = errors(
+            "network = \"testnet\"\n[postgres]\nmode = \"enabled\"\nimage = \"myorg/pg:17\"\nversion = \"17\"",
+        );
+        assert!(e.iter().any(|m| m.contains("already pins a tag")));
+        // repo-only image + version is fine; full ref alone is fine
+        assert!(errors("network = \"testnet\"\n[postgres]\nmode = \"enabled\"\nimage = \"myorg/pg\"\nversion = \"17\"").is_empty());
+        assert!(
+            errors(
+                "network = \"testnet\"\n[postgres]\nmode = \"enabled\"\nimage = \"myorg/pg:17\""
+            )
+            .is_empty()
         );
     }
 
