@@ -74,6 +74,7 @@ pub struct Bitcoind {
     pub host: Option<String>,
     pub rpc_port: Option<u16>,
     pub p2p_port: Option<u16>,
+    /// SECRET: set in secrets.toml ([bitcoind] rpc_user / rpc_password).
     pub rpc_user: Option<String>,
     pub rpc_password: Option<String>,
 }
@@ -94,9 +95,9 @@ pub struct StacksNode {
     /// Required when mode = "external"
     pub rpc_host: Option<String>,
     pub rpc_port: Option<u16>,
-    /// The node's `connection_options.auth_token`. Only configurable when
-    /// mode = "external" (it must match what your node runs with); managed
-    /// nodes always use a tool-managed token.
+    /// The node's `connection_options.auth_token`. SECRET: set in
+    /// secrets.toml ([stacks-node] auth_token), never here. For an external
+    /// node it must match what your node runs with.
     pub auth_token: Option<String>,
 }
 
@@ -162,10 +163,68 @@ pub struct Postgres {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub user: Option<String>,
+    /// SECRET: set in secrets.toml ([postgres] password), never here.
     pub password: Option<String>,
 }
 
 impl Deployment {
+    /// Secret-bearing fields that must NOT be set in stacks.toml.
+    fn config_secret_leaks(&self) -> Vec<(&'static str, &'static str)> {
+        let mut leaks = Vec::new();
+        if self.bitcoind.rpc_user.is_some() {
+            leaks.push(("bitcoind", "rpc_user"));
+        }
+        if self.bitcoind.rpc_password.is_some() {
+            leaks.push(("bitcoind", "rpc_password"));
+        }
+        if self.postgres.password.is_some() {
+            leaks.push(("postgres", "password"));
+        }
+        if self.stacks_node.auth_token.is_some() {
+            leaks.push(("stacks-node", "auth_token"));
+        }
+        leaks
+    }
+
+    /// Fill secret fields from the secrets.toml overlay.
+    fn merge_secrets(&mut self, overlay: crate::utils::secrets::SecretsOverlay) {
+        self.bitcoind.rpc_user = overlay.bitcoind.rpc_user;
+        self.bitcoind.rpc_password = overlay.bitcoind.rpc_password;
+        self.postgres.password = overlay.postgres.password;
+        self.stacks_node.auth_token = overlay.stacks_node.auth_token;
+    }
+
+    /// Secrets that MUST be present given the enabled services. The tool
+    /// never writes secrets.toml itself — missing values are the user's to
+    /// add, so the error carries a paste-ready snippet.
+    fn check_required_secrets(&self, config_dir: &Path) -> Result<()> {
+        let mut missing: Vec<(&str, &str)> = Vec::new();
+        if self.postgres.mode != ServiceMode::Disabled && self.postgres.password.is_none() {
+            missing.push(("postgres", "password"));
+        }
+        if self.bitcoind.mode == ServiceMode::Enabled {
+            if self.bitcoind.rpc_user.is_none() {
+                missing.push(("bitcoind", "rpc_user"));
+            }
+            if self.bitcoind.rpc_password.is_none() {
+                missing.push(("bitcoind", "rpc_password"));
+            }
+        }
+        let node_needs_token = self.stacks_node.mode == ServiceMode::Enabled
+            || (self.stacks_node.mode == ServiceMode::External
+                && (self.stacks_signer.mode == ServiceMode::Enabled
+                    || self.stacks_mesh_api.mode == ServiceMode::Enabled));
+        if node_needs_token && self.stacks_node.auth_token.is_none() {
+            missing.push(("stacks-node", "auth_token"));
+        }
+        if !missing.is_empty() {
+            return Err(crate::utils::secrets::missing_secrets_error(
+                config_dir, &missing,
+            ));
+        }
+        Ok(())
+    }
+
     /// Cross-service validation: the rules that make invalid stacks fail at
     /// `up` time instead of becoming runtime mysteries.
     pub fn validate(&self) -> (Vec<String>, Vec<String>) {
@@ -273,13 +332,6 @@ impl Deployment {
                     )
                 }
                 ServiceMode::External => {
-                    if self.stacks_node.auth_token.is_none() {
-                        errors.push(
-                            "a managed signer with an external node needs [stacks-node] auth_token \
-                             (your node's `connection_options.auth_token`, so the signer can authenticate)"
-                                .into(),
-                        );
-                    }
                     warnings.push(
                         "signer is managed but the node is external: apply `rendered/apply-to-your-node.toml` \
                          to your node (stacker = true, matching auth_password, signer events_observer)"
@@ -288,14 +340,6 @@ impl Deployment {
                 }
                 _ => {}
             }
-        }
-
-        if self.stacks_node.mode != ServiceMode::External && self.stacks_node.auth_token.is_some() {
-            warnings.push(
-                "[stacks-node] auth_token is only used when mode = \"external\"; \
-                 a managed node uses a tool-managed token"
-                    .into(),
-            );
         }
 
         // Reversed (push) edges: the node's config must name its observers. When
@@ -332,6 +376,27 @@ pub fn load(path: &Path) -> Result<Deployment> {
     let config_dir = path.parent().unwrap_or(Path::new("."));
     deployment.net = network::load(&deployment.network, config_dir)?;
 
+    // Secrets never belong in the committable config; they come from the
+    // secrets.toml overlay beside it.
+    let leaked = deployment.config_secret_leaks();
+    if !leaked.is_empty() {
+        for (section, field) in &leaked {
+            eprintln!(
+                "{}",
+                format!(
+                    "error: [{section}] {field} is a secret — remove it from {} and set it in secrets.toml instead",
+                    path.display()
+                )
+                .red()
+            );
+        }
+        bail!("secrets found in {}", path.display());
+    }
+    if let Some(overlay) = crate::utils::secrets::load(config_dir)? {
+        deployment.merge_secrets(overlay);
+    }
+    deployment.check_required_secrets(config_dir)?;
+
     let (errors, warnings) = deployment.validate();
     for w in &warnings {
         eprintln!("{}", format!("warning: {w}").yellow());
@@ -351,6 +416,9 @@ pub fn init(force: bool) -> Result<()> {
         bail!("stacks.toml already exists (use --force to overwrite)");
     }
     std::fs::write(path, DEFAULT_STACK_TOML)?;
+    // secrets.toml lives beside stacks.toml. Generated ONLY when missing —
+    // an existing file is the user's and is never touched, even with --force.
+    crate::utils::secrets::generate_if_missing(Path::new("."))?;
     println!("Wrote stacks.toml — edit it, then run `stacksup start`.");
     Ok(())
 }
@@ -380,8 +448,7 @@ mode = "disabled"
 # host = "10.0.1.5"
 # rpc_port = 18332
 # p2p_port = 18333
-# rpc_user = "stacks"
-# rpc_password = "..."
+# Credentials go in secrets.toml ([bitcoind] rpc_user / rpc_password).
 
 [stacks-node]
 mode = "enabled"
@@ -390,7 +457,7 @@ role = "follower" # follower | signer-host (required when running a signer)
 # For mode = "external":
 # rpc_host = "10.0.1.6"
 # rpc_port = 20443
-# auth_token = "..." # your node's connection_options.auth_token
+# The auth token goes in secrets.toml ([stacks-node] auth_token).
 
 [stacks-signer]
 mode = "disabled"
@@ -532,28 +599,61 @@ mod tests {
     }
 
     #[test]
-    fn signer_with_external_node_needs_auth_token() {
-        let base = "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"";
-        let e = errors(base);
-        assert!(e.iter().any(|m| m.contains("auth_token")));
-        // with the token supplied it degrades to a warning, not an error
-        let ok = "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\nauth_token = \"tok-1234\"\n[stacks-signer]\nmode = \"enabled\"";
-        assert!(errors(ok).is_empty());
+    fn signer_with_external_node_warns_about_apply_snippet() {
+        let w = warnings(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"",
+        );
+        assert!(w.iter().any(|m| m.contains("apply-to-your-node")));
+    }
+
+    #[test]
+    fn secrets_in_stacks_toml_are_detected_as_leaks() {
+        let d = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\nrpc_password = \"p\"\n[postgres]\nmode = \"enabled\"\npassword = \"x\"\n[stacks-node]\nmode = \"enabled\"\nauth_token = \"t\"",
+        );
+        let leaks = d.config_secret_leaks();
+        assert!(leaks.contains(&("bitcoind", "rpc_password")));
+        assert!(leaks.contains(&("postgres", "password")));
+        assert!(leaks.contains(&("stacks-node", "auth_token")));
+        // a clean config has no leaks
         assert!(
-            warnings(ok)
-                .iter()
-                .any(|m| m.contains("apply-to-your-node"))
+            deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"")
+                .config_secret_leaks()
+                .is_empty()
         );
     }
 
     #[test]
-    fn auth_token_on_managed_node_warns() {
-        let w = warnings(
-            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"\nauth_token = \"x\"",
+    fn required_secrets_depend_on_enabled_services() {
+        // enabled node + postgres, empty overlay -> both reported missing
+        let d = deployment(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
         );
-        assert!(
-            w.iter()
-                .any(|m| m.contains("only used when mode = \"external\""))
+        let err = d
+            .check_required_secrets(Path::new("."))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("[postgres]\npassword"));
+        assert!(err.contains("[stacks-node]\nauth_token"));
+
+        // external node pushing to a managed signer still needs the token
+        let d = deployment(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"",
         );
+        let err = d
+            .check_required_secrets(Path::new("."))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("[stacks-node]\nauth_token"));
+
+        // merged overlay satisfies the requirements
+        let mut d = deployment(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        d.merge_secrets(
+            toml::from_str("[postgres]\npassword = \"p\"\n[stacks-node]\nauth_token = \"t\"")
+                .unwrap(),
+        );
+        assert!(d.check_required_secrets(Path::new(".")).is_ok());
     }
 }

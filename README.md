@@ -57,6 +57,32 @@ be configured to *push* to them; `stacksup config render` emits
 `rendered/apply-to-your-node.toml` with the exact blocks to add on your side,
 and `stacksup config check` verifies the loop is closed.
 
+## Secrets
+
+Credentials never live in `stacks.toml` — the tool rejects them there. They go
+in a `secrets.toml` beside it (plain text, mode 0600, gitignored), which is
+merged into the config at load time:
+
+```toml
+[postgres]
+password = "..."
+
+[bitcoind]
+rpc_user = "..."
+rpc_password = "..."
+
+[stacks-node]
+auth_token = "..."
+```
+
+`stacksup config init` generates one with random values when none exists;
+an existing `secrets.toml` is yours and is **never modified or overwritten**
+(not even by `init --force`) — if a required value is missing, the tool errors
+out with a paste-ready snippet of exactly what to add. At render time the
+Postgres password is delivered as a compose secret file and the bitcoind
+credentials become a derived `-rpcauth` hash, so no plain-text secret appears
+in `docker inspect`.
+
 ## Development
 
 ```bash
@@ -82,7 +108,7 @@ the service's configured `version` in stacks.toml.
 - [ ] `status --watch`: live sync progress (bitcoind headers, node tip vs peers via `/v3/health`, API ingest lag) via bollard
 - [ ] Snapshot seeding on first `up`: Hiro archive chainstate + matching API pg_dump, resumable, checksummed
 - [ ] `doctor`: chain-id cross-checks, event-stream-flowing check, node↔signer auth verification
-- [ ] Secrets: generated per-stack tokens/passwords in a gitignored env file (currently dev defaults — do not use on mainnet)
+- [x] Secrets: user-owned `secrets.toml` overlay beside stacks.toml — pg password via compose secret file, bitcoind via rpcauth hash, node/signer auth token
 - [ ] `upgrade`: image update with pre-upgrade pg backup, ordered restart, post-check
 - [ ] `snapshot`: stop-consistent chainstate + pg_dump pairs with version metadata
 - [ ] Profiles: `exchange` (readonly API replicas, pruned mode), richer `signer` (monitor-signers wiring)
