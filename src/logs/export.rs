@@ -219,6 +219,7 @@ fn secret_values(deployment: &Deployment) -> Vec<String> {
     // Post-merge, every secret lives on the deployment itself.
     let mut v: Vec<String> = [
         deployment.postgres.password.clone(),
+        deployment.bitcoind.rpc_user.clone(),
         deployment.bitcoind.rpc_password.clone(),
         deployment.stacks_node.auth_token.clone(),
     ]
@@ -231,6 +232,9 @@ fn secret_values(deployment: &Deployment) -> Vec<String> {
     ) {
         v.push(crate::utils::secrets::bitcoind_rpcauth(user, password));
     }
+    // Longest first: the rpcauth line embeds the username, so scrubbing the
+    // shorter username first would split it and leave the verifier exposed.
+    v.sort_by_key(|s| std::cmp::Reverse(s.len()));
     v.retain(|s| s.len() >= 4);
     v
 }

@@ -78,7 +78,10 @@ auth_token = "..."
 `stacksup config init` generates one with random values when none exists;
 an existing `secrets.toml` is yours and is **never modified or overwritten**
 (not even by `init --force`) — if a required value is missing, the tool errors
-out with a paste-ready snippet of exactly what to add. At render time the
+out with a paste-ready snippet of exactly what to add. The file must be
+owner-only (`chmod 600`), and values must be 8–128 characters of printable
+ASCII without spaces, quotes, backslashes, `$`, or backticks (they are
+interpolated into rendered TOML/env/compose files). At render time the
 Postgres password is delivered as a compose secret file and the bitcoind
 credentials become a derived `-rpcauth` hash, so no plain-text secret appears
 in `docker inspect`.

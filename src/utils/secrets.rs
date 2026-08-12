@@ -11,12 +11,19 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 pub const SECRETS_FILE: &str = "secrets.toml";
+
+/// Secret values are interpolated into rendered TOML, env files, and the
+/// compose file, so they are validated to an alphabet that is inert in all
+/// of those formats: printable ASCII without whitespace, quotes, backslash,
+/// `$` (compose interpolation), or backtick.
+const MIN_SECRET_LEN: usize = 8;
+const MAX_SECRET_LEN: usize = 128;
 
 /// The overlay mirrors stacks.toml's structure, restricted to secret-bearing
 /// fields. `deny_unknown_fields` makes typos and non-secret config in this
@@ -55,12 +62,26 @@ fn secrets_path(data_dir: &Path) -> PathBuf {
     data_dir.join(SECRETS_FILE)
 }
 
-/// Load the overlay. Missing file is `None` — callers decide whether that is
-/// an error (render does; read-only commands tolerate it).
+/// Load the overlay. Missing file is `None`; `config::load` then reports the
+/// deployment's required secrets as missing. Present values are validated
+/// (permissions, length, alphabet) so bad ones fail here with a precise
+/// message instead of producing broken rendered configs.
 pub fn load(data_dir: &Path) -> Result<Option<SecretsOverlay>> {
     let path = secrets_path(data_dir);
     if !path.exists() {
         return Ok(None);
+    }
+    // The file holds clear-text credentials: refuse to proceed while other
+    // users can read it. Fixing the mode is the user's move — this tool
+    // never modifies the file, permissions included.
+    let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path)?.permissions());
+    if mode & 0o077 != 0 {
+        bail!(
+            "{} is readable by other users (mode {:03o}) — run `chmod 600 {}`",
+            path.display(),
+            mode & 0o777,
+            path.display()
+        );
     }
     let raw = std::fs::read_to_string(&path)?;
     let overlay: SecretsOverlay = toml::from_str(&raw).map_err(|e| {
@@ -76,7 +97,42 @@ pub fn load(data_dir: &Path) -> Result<Option<SecretsOverlay>> {
             anyhow::anyhow!("invalid secrets file {}: {e}", path.display())
         }
     })?;
+    validate_values(&overlay, &path)?;
     Ok(Some(overlay))
+}
+
+/// Every present value must be long enough to redact safely and free of
+/// characters that need escaping in any rendered format (TOML strings, env
+/// files, compose commands).
+fn validate_values(overlay: &SecretsOverlay, path: &Path) -> Result<()> {
+    let fields: [(&str, &str, &Option<String>); 4] = [
+        ("bitcoind", "rpc_user", &overlay.bitcoind.rpc_user),
+        ("bitcoind", "rpc_password", &overlay.bitcoind.rpc_password),
+        ("postgres", "password", &overlay.postgres.password),
+        ("stacks-node", "auth_token", &overlay.stacks_node.auth_token),
+    ];
+    for (section, field, value) in fields {
+        let Some(v) = value else { continue };
+        if v.len() < MIN_SECRET_LEN || v.len() > MAX_SECRET_LEN {
+            bail!(
+                "[{section}] {field} in {} must be {MIN_SECRET_LEN}-{MAX_SECRET_LEN} characters (got {})",
+                path.display(),
+                v.len()
+            );
+        }
+        if let Some(c) = v
+            .chars()
+            .find(|c| !c.is_ascii_graphic() || matches!(c, '"' | '\'' | '\\' | '$' | '`'))
+        {
+            bail!(
+                "[{section}] {field} in {} contains unsupported character {c:?} — \
+                 secrets are interpolated into rendered TOML/env/compose files, so use \
+                 printable ASCII without spaces, quotes, backslashes, `$`, or backticks",
+                path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Create secrets.toml with generated values — ONLY when it does not exist.
@@ -92,9 +148,12 @@ pub fn generate_if_missing(data_dir: &Path) -> Result<()> {
          # Keep this file out of version control (mode 0600). stacksup never\n\
          # modifies it; missing values are reported as errors at render time.\n\n\
          [postgres]\npassword = \"{}\"\n\n\
-         [bitcoind]\nrpc_user = \"stacksup\"\nrpc_password = \"{}\"\n\n\
+         [bitcoind]\nrpc_user = \"stacksup-{}\"\nrpc_password = \"{}\"\n\n\
          [stacks-node]\nauth_token = \"{}\"\n",
         random_hex(32)?,
+        // rpc_user is redacted in `logs export`; a random suffix keeps that
+        // exact-value scrub from also eating every plain "stacksup" in logs.
+        random_hex(4)?,
         random_hex(32)?,
         random_hex(32)?,
     );
@@ -158,15 +217,28 @@ fn derived_salt(user: &str, password: &str) -> String {
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// bail! with a ready-to-paste snippet listing the missing secret fields.
+/// bail! with a ready-to-paste snippet listing the missing secret fields,
+/// one table per section (fields sharing a section are grouped so the
+/// snippet is valid TOML).
 pub fn missing_secrets_error(data_dir: &Path, missing: &[(&str, &str)]) -> anyhow::Error {
-    let snippet: String = missing
+    let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (section, field) in missing {
+        match sections.last_mut() {
+            Some((s, fields)) if s == section => fields.push(field),
+            _ => sections.push((section, vec![field])),
+        }
+    }
+    let snippet: String = sections
         .iter()
-        .map(|(section, field)| format!("[{section}]\n{field} = \"...\"\n"))
+        .map(|(section, fields)| {
+            let body: String = fields.iter().map(|f| format!("{f} = \"...\"\n")).collect();
+            format!("[{section}]\n{body}")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     anyhow::anyhow!(
-        "missing required secrets in {} — add:\n\n{snippet}\n\
+        "missing required secrets in {} — add these values (merge into the \
+         matching sections if they already exist):\n\n{snippet}\n\
          (stacksup never modifies this file; `stacksup config init` generates one when absent)",
         secrets_path(data_dir).display()
     )
@@ -182,6 +254,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Test overlays must pass the same permission gate as real ones.
+    fn write_overlay(dir: &Path, content: &str) {
+        write_0600(&dir.join(SECRETS_FILE), content).unwrap();
     }
 
     #[test]
@@ -215,36 +292,58 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
         let overlay = load(&dir).unwrap().unwrap();
         assert_eq!(overlay.postgres.password.unwrap().len(), 64);
-        assert_eq!(overlay.bitcoind.rpc_user.as_deref(), Some("stacksup"));
+        assert!(overlay.bitcoind.rpc_user.unwrap().starts_with("stacksup-"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_readable_secrets_file_is_rejected() {
+        let dir = temp_dir("mode");
+        std::fs::write(
+            dir.join(SECRETS_FILE),
+            "[postgres]\npassword = \"hunter2hunter2\"\n",
+        )
+        .unwrap(); // default umask: group/world readable
+        let err = load(&dir).unwrap_err().to_string();
+        assert!(err.contains("chmod 600"), "got: {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn partial_overlay_parses_and_unknown_fields_fail() {
         let dir = temp_dir("partial");
-        std::fs::write(
-            dir.join(SECRETS_FILE),
-            "[postgres]\npassword = \"hunter2\"\n",
-        )
-        .unwrap();
+        write_overlay(&dir, "[postgres]\npassword = \"hunter2hunter2\"\n");
         let overlay = load(&dir).unwrap().unwrap();
-        assert_eq!(overlay.postgres.password.as_deref(), Some("hunter2"));
+        assert_eq!(overlay.postgres.password.as_deref(), Some("hunter2hunter2"));
         assert!(overlay.stacks_node.auth_token.is_none());
 
-        std::fs::write(dir.join(SECRETS_FILE), "[postgres]\nmode = \"enabled\"\n").unwrap();
+        write_overlay(&dir, "[postgres]\nmode = \"enabled\"\n");
         let err = load(&dir).unwrap_err().to_string();
         assert!(err.contains("invalid secrets file"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
+    fn short_and_unsafe_values_are_rejected() {
+        let dir = temp_dir("values");
+        write_overlay(&dir, "[postgres]\npassword = \"short\"\n");
+        let err = load(&dir).unwrap_err().to_string();
+        assert!(err.contains("8-128 characters"), "got: {err}");
+
+        write_overlay(&dir, "[postgres]\npassword = \"with space etc\"\n");
+        let err = load(&dir).unwrap_err().to_string();
+        assert!(err.contains("unsupported character"), "got: {err}");
+
+        write_overlay(&dir, "[stacks-node]\nauth_token = \"has$dollar1\"\n");
+        let err = load(&dir).unwrap_err().to_string();
+        assert!(err.contains("unsupported character"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn legacy_flat_format_gets_migration_hint() {
         let dir = temp_dir("legacy");
-        std::fs::write(
-            dir.join(SECRETS_FILE),
-            "node_auth_token = \"x\"\npg_password = \"y\"\n",
-        )
-        .unwrap();
+        write_overlay(&dir, "node_auth_token = \"x\"\npg_password = \"y\"\n");
         let err = load(&dir).unwrap_err().to_string();
         assert!(err.contains("old flat format"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -264,13 +363,21 @@ mod tests {
     }
 
     #[test]
-    fn missing_secrets_error_lists_fields() {
+    fn missing_secrets_error_groups_fields_by_section() {
         let err = missing_secrets_error(
             Path::new("/data"),
-            &[("postgres", "password"), ("stacks-node", "auth_token")],
+            &[
+                ("postgres", "password"),
+                ("bitcoind", "rpc_user"),
+                ("bitcoind", "rpc_password"),
+                ("stacks-node", "auth_token"),
+            ],
         )
         .to_string();
         assert!(err.contains("[postgres]\npassword"));
+        // two bitcoind fields, ONE [bitcoind] header — the snippet stays valid TOML
+        assert!(err.contains("[bitcoind]\nrpc_user = \"...\"\nrpc_password = \"...\""));
+        assert_eq!(err.matches("[bitcoind]").count(), 1);
         assert!(err.contains("[stacks-node]\nauth_token"));
         assert!(err.contains("never modifies"));
     }
