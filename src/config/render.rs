@@ -14,6 +14,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::config::{Deployment, ServiceMode};
+use crate::utils::secrets;
 use crate::utils::services::*;
 
 pub const COMPOSE_PROJECT: &str = "stacks";
@@ -47,6 +48,13 @@ const API_PG_SCHEMA: &str = "stacks_blockchain_api";
 struct ComposeFile {
     services: BTreeMap<String, ComposeService>,
     networks: BTreeMap<String, Option<()>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    secrets: BTreeMap<String, ComposeSecret>,
+}
+
+#[derive(Serialize)]
+struct ComposeSecret {
+    file: String,
 }
 
 #[derive(Serialize, Default)]
@@ -69,6 +77,8 @@ struct ComposeService {
     depends_on: Vec<String>,
     restart: String,
     networks: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    secrets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     extra_hosts: Vec<String>,
 }
@@ -102,6 +112,7 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     let mut compose = ComposeFile {
         services: BTreeMap::new(),
         networks: BTreeMap::from([(COMPOSE_NETWORK.to_string(), None)]),
+        secrets: BTreeMap::new(),
     };
 
     // Pre-create bind-mount sources so docker doesn't create them root-owned.
@@ -166,6 +177,17 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     if deployment.postgres.mode == ServiceMode::Enabled {
         chainstate_subdir("postgres")?;
         std::fs::create_dir_all(data_dir.join("downloads"))?;
+        std::fs::create_dir_all(dir.join("secrets"))?;
+        secrets::write_0600(
+            &dir.join("secrets/pg_password"),
+            deployment.postgres.password.as_deref().unwrap_or_default(),
+        )?;
+        compose.secrets.insert(
+            "pg_password".into(),
+            ComposeSecret {
+                file: "./secrets/pg_password".into(),
+            },
+        );
         compose
             .services
             .insert("postgres".into(), postgres_service(deployment));
@@ -194,9 +216,20 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
         format!("-chain={}", deployment.net.bitcoind.chain),
         "-rpcbind=0.0.0.0".into(),
         "-rpcallowip=0.0.0.0/0".into(),
-        // TODO(hackathon): generate rpcauth instead of user/pass defaults
-        "-rpcuser=stacks".into(),
-        "-rpcpassword=stacks".into(),
+        // A salted hash — unlike -rpcpassword, safe to expose via docker
+        // inspect. The plaintext lives in secrets.toml and the node's
+        // mounted Config.toml only.
+        format!(
+            "-rpcauth={}",
+            secrets::bitcoind_rpcauth(
+                deployment.bitcoind.rpc_user.as_deref().unwrap_or_default(),
+                deployment
+                    .bitcoind
+                    .rpc_password
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+        ),
     ];
     svc.ports = vec![format!("{rpc}:{rpc}"), format!("{p2p}:{p2p}")];
     svc.volumes = vec!["../chainstate/bitcoind:/home/bitcoin/.bitcoin".into()];
@@ -284,7 +317,6 @@ fn postgres_major(deployment: &Deployment) -> Option<u32> {
 fn postgres_service(deployment: &Deployment) -> ComposeService {
     let mut svc = ComposeService::new("postgres", &postgres_image(deployment));
     svc.ports = vec![format!("{POSTGRES_PORT}:{POSTGRES_PORT}")];
-    // TODO(hackathon): generate a password into a .env secret file instead
     svc.environment.insert(
         "POSTGRES_USER".into(),
         deployment
@@ -293,14 +325,13 @@ fn postgres_service(deployment: &Deployment) -> ComposeService {
             .clone()
             .unwrap_or_else(|| "postgres".into()),
     );
+    // Password arrives via a compose secret file, not container env —
+    // `docker inspect` shows only the path.
     svc.environment.insert(
-        "POSTGRES_PASSWORD".into(),
-        deployment
-            .postgres
-            .password
-            .clone()
-            .unwrap_or_else(|| "postgres".into()),
+        "POSTGRES_PASSWORD_FILE".into(),
+        "/run/secrets/pg_password".into(),
     );
+    svc.secrets = vec!["pg_password".into()];
     svc.environment
         .insert("POSTGRES_DB".into(), API_PG_DATABASE.into());
     // Postgres 18+ images keep data in a version-specific subdirectory and
@@ -396,12 +427,12 @@ fn node_config_toml(deployment: &Deployment) -> String {
         if deployment.bitcoind.mode == ServiceMode::Enabled {
             out.push_str(&format!(
                 "username = \"{}\"\npassword = \"{}\"\n",
-                deployment.bitcoind.rpc_user.as_deref().unwrap_or("stacks"),
+                deployment.bitcoind.rpc_user.as_deref().unwrap_or_default(),
                 deployment
                     .bitcoind
                     .rpc_password
                     .as_deref()
-                    .unwrap_or("stacks"),
+                    .unwrap_or_default(),
             ));
         } else if let (Some(user), Some(password)) = (
             &deployment.bitcoind.rpc_user,
@@ -478,14 +509,15 @@ stacks_private_key = "REPLACE_ME"
 /// The node's `connection_options.auth_token`, which the signer's
 /// `auth_password` must match. External nodes bring their own token
 /// (`[stacks-node] auth_token`); managed nodes use a tool-managed one.
-// TODO(hackathon): generate per-stack random token into a gitignored secrets file.
+/// The auth token shared by node config, signer, and mesh env — a single
+/// deployment field, populated from secrets.toml (required by validation
+/// whenever something consumes it).
 fn node_auth_token(deployment: &Deployment) -> String {
-    if deployment.stacks_node.mode == ServiceMode::External
-        && let Some(token) = &deployment.stacks_node.auth_token
-    {
-        return token.clone();
-    }
-    "stacks-tool-dev-auth-token".into()
+    deployment
+        .stacks_node
+        .auth_token
+        .clone()
+        .unwrap_or_default()
 }
 
 fn api_env(deployment: &Deployment) -> String {
@@ -518,11 +550,7 @@ TESTNET_SBTC_FAUCET_ENABLED=false
         pg_port = postgres_port(deployment),
         pg_schema = API_PG_SCHEMA,
         pg_user = deployment.postgres.user.as_deref().unwrap_or("postgres"),
-        pg_password = deployment
-            .postgres
-            .password
-            .as_deref()
-            .unwrap_or("postgres"),
+        pg_password = deployment.postgres.password.as_deref().unwrap_or_default(),
         pg_db = API_PG_DATABASE,
     )
 }
@@ -583,8 +611,24 @@ fn apply_to_your_node(deployment: &Deployment) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Parse and merge the same test secrets `load()` would pull from a
+    /// secrets.toml, so generators see a post-merge deployment. Managed
+    /// bitcoind gets credentials; external keeps whatever the toml set.
     fn deployment(toml_str: &str) -> Deployment {
-        crate::config::test_deployment(toml_str)
+        let mut d = crate::config::test_deployment(toml_str);
+        d.postgres
+            .password
+            .get_or_insert_with(|| "test-pg-password".into());
+        d.stacks_node
+            .auth_token
+            .get_or_insert_with(|| "test-node-token".into());
+        if d.bitcoind.mode == ServiceMode::Enabled {
+            d.bitcoind.rpc_user.get_or_insert_with(|| "stacksup".into());
+            d.bitcoind
+                .rpc_password
+                .get_or_insert_with(|| "test-btc-password".into());
+        }
+        d
     }
 
     const TESTNET_FULL: &str = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[stacks-mesh-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"";
@@ -669,12 +713,13 @@ mod tests {
         );
         let cfg = node_config_toml(&d);
         assert!(!cfg.contains("username"));
-        // managed -> tool defaults present
+        // managed -> generated secrets, never hardcoded defaults
         let d = deployment(
             "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
         );
         let cfg = node_config_toml(&d);
-        assert!(cfg.contains("username = \"stacks\""));
+        assert!(cfg.contains("username = \"stacksup\""));
+        assert!(cfg.contains("password = \"test-btc-password\""));
     }
 
     #[test]

@@ -216,16 +216,26 @@ fn self_report(config_path: &Path, data_dir: &Path, args: &[&str]) -> String {
 /// Secret *values* known from the config, scrubbed wherever they appear
 /// (configs and logs alike — the node echoes config at startup).
 fn secret_values(deployment: &Deployment) -> Vec<String> {
+    // Post-merge, every secret lives on the deployment itself.
     let mut v: Vec<String> = [
         deployment.postgres.password.clone(),
+        deployment.bitcoind.rpc_user.clone(),
         deployment.bitcoind.rpc_password.clone(),
         deployment.stacks_node.auth_token.clone(),
     ]
     .into_iter()
     .flatten()
-    .filter(|s| s.len() >= 4)
     .collect();
-    v.push("stacks-tool-dev-auth-token".into());
+    if let (Some(user), Some(password)) = (
+        &deployment.bitcoind.rpc_user,
+        &deployment.bitcoind.rpc_password,
+    ) {
+        v.push(crate::utils::secrets::bitcoind_rpcauth(user, password));
+    }
+    // Longest first: the rpcauth line embeds the username, so scrubbing the
+    // shorter username first would split it and leave the verifier exposed.
+    v.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    v.retain(|s| s.len() >= 4);
     v
 }
 

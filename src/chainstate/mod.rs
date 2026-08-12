@@ -196,24 +196,14 @@ fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
         return tip;
     }
     let chain = deployment.net.bitcoind.chain.as_str();
+    // bitcoin-cli inside the container authenticates via the datadir cookie
+    // file — no credentials needed (and none appear in process args).
     let out = Command::new("docker")
         .args([
             "exec",
             "stacks-bitcoind",
             "bitcoin-cli",
             &format!("-chain={chain}"),
-            &format!(
-                "-rpcuser={}",
-                deployment.bitcoind.rpc_user.as_deref().unwrap_or("stacks")
-            ),
-            &format!(
-                "-rpcpassword={}",
-                deployment
-                    .bitcoind
-                    .rpc_password
-                    .as_deref()
-                    .unwrap_or("stacks")
-            ),
             "getblockcount",
         ])
         .output();
