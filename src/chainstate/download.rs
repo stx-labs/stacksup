@@ -36,6 +36,9 @@ pub struct Opts {
     pub no_verify: bool,
     pub skip_version_check: bool,
     pub keep_archives: bool,
+    /// The caller will start the deployment after a successful restore
+    /// (only changes the final hint; starting is the caller's job).
+    pub start: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +59,10 @@ struct Job {
     image: String,
 }
 
-pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<()> {
+/// Returns `true` when archives were actually restored — `false` on
+/// `--check-only` or a declined confirmation, so callers gating follow-up
+/// work (like `--start`) don't act on a no-op run.
+pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool> {
     let network = deployment.net.hiro_archive_path.clone().with_context(|| {
         format!(
             "network `{}` has no published archives (no hiro_archive_path in its definition) — \
@@ -199,7 +205,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<()> {
 
     if opts.check_only {
         println!("\n--check-only: stopping here.");
-        return Ok(());
+        return Ok(false);
     }
 
     if !opts.yes {
@@ -209,7 +215,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<()> {
         io::stdin().read_line(&mut input)?;
         if !matches!(input.trim(), "y" | "Y" | "yes") {
             println!("Aborted.");
-            return Ok(());
+            return Ok(false);
         }
     }
     println!(
@@ -272,10 +278,16 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<()> {
     }
 
     println!("\n{}", "Done.".green());
-    println!(
-        "Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up."
-    );
-    Ok(())
+    if opts.start {
+        println!(
+            "Run `stacksup chainstate status` once services are up to confirm the tips line up."
+        );
+    } else {
+        println!(
+            "Next: `stacksup start`, then `stacksup chainstate status` to confirm the tips line up."
+        );
+    }
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
