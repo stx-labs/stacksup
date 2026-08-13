@@ -285,6 +285,13 @@ fn run() -> Result<()> {
                     anyhow::bail!("--start cannot be combined with --check-only");
                 }
                 let deployment = config::load(&cli.config)?;
+                if start {
+                    // Render BEFORE the restore: the API restore runs
+                    // pg_restore through the compose postgres service, which
+                    // needs rendered/docker-compose.yml — on a fresh setup
+                    // nothing has rendered it yet.
+                    config::render::render(&deployment, &cli.data_dir)?;
+                }
                 let restored = chainstate::download::run(
                     &deployment,
                     &cli.data_dir,
@@ -301,7 +308,6 @@ fn run() -> Result<()> {
                 )?;
                 if start && restored {
                     println!("\nStarting the deployment.");
-                    config::render::render(&deployment, &cli.data_dir)?;
                     utils::docker::start(&deployment, &cli.data_dir, None)?;
                 }
                 Ok(())
