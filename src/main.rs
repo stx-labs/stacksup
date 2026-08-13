@@ -157,6 +157,10 @@ enum ChainstateCommand {
         /// Keep downloaded archives after a successful restore
         #[arg(long)]
         keep_archives: bool,
+        /// Start the deployment (render + `stacksup start`) once the
+        /// chainstate is restored
+        #[arg(long)]
+        start: bool,
     },
 }
 
@@ -265,6 +269,7 @@ fn run() -> Result<()> {
                 no_verify,
                 skip_version_check,
                 keep_archives,
+                start,
             } => {
                 let service = match service {
                     ServiceArg::Node => chainstate::download::ServiceSel::Node,
@@ -276,8 +281,11 @@ fn run() -> Result<()> {
                         "--archive requires exactly one service: --service node or --service api"
                     );
                 }
+                if start && check_only {
+                    anyhow::bail!("--start cannot be combined with --check-only");
+                }
                 let deployment = config::load(&cli.config)?;
-                chainstate::download::run(
+                let restored = chainstate::download::run(
                     &deployment,
                     &cli.data_dir,
                     chainstate::download::Opts {
@@ -288,8 +296,15 @@ fn run() -> Result<()> {
                         no_verify,
                         skip_version_check,
                         keep_archives,
+                        start,
                     },
-                )
+                )?;
+                if start && restored {
+                    println!("\nStarting the deployment.");
+                    config::render::render(&deployment, &cli.data_dir)?;
+                    utils::docker::start(&deployment, &cli.data_dir, None)?;
+                }
+                Ok(())
             }
         },
     }

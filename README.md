@@ -103,7 +103,9 @@ API). Downloads are resumable — Ctrl-C and re-run any time. Useful flags:
 `--service node|api|all`, `--archive <file|url|path>` to pin a specific
 archive, `--check-only` for a dry-run plan, `--yes` for unattended runs
 (`nohup stacksup chainstate download --yes &`), `--no-verify`,
-`--skip-version-check`, `--keep-archives`. Always resolves versioned archives (never -latest pointers); the archive's version must be ≤
+`--skip-version-check`, `--keep-archives`, and `--start` to render and
+start the deployment as soon as the restore finishes (seed + boot in one
+command: `stacksup chainstate download --yes --start`). Always resolves versioned archives (never -latest pointers); the archive's version must be ≤
 the service's configured `version` in stacks.toml.
 
 ## Roadmap
