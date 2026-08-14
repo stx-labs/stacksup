@@ -230,7 +230,11 @@ fn secret_values(deployment: &Deployment) -> Vec<String> {
         &deployment.bitcoind.rpc_user,
         &deployment.bitcoind.rpc_password,
     ) {
-        v.push(crate::utils::secrets::bitcoind_rpcauth(user, password));
+        let rpcauth = crate::utils::secrets::bitcoind_rpcauth(user, password);
+        // The compose file carries the `$$`-escaped form (compose
+        // interpolation); scrub both spellings.
+        v.push(rpcauth.replace('$', "$$"));
+        v.push(rpcauth);
     }
     // Longest first: the rpcauth line embeds the username, so scrubbing the
     // shorter username first would split it and leave the verifier exposed.
