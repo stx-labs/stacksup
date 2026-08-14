@@ -58,12 +58,14 @@ be configured to *push* to them; `stacksup config render` emits
 and `stacksup config check` verifies the loop is closed.
 
 Containers are segmented across three docker networks so a compromised
-API-side container has no direct line to the signer or bitcoind: `bitcoin`
-(bitcoind + node), `core` (node + signer), and `services` (API, mesh API,
-Postgres). The node bridges all three — everything talks to it — and each
-network is only declared when it has members. bitcoind's RPC port is
+API-side container has no route to the signer or to bitcoind's RPC
+interface: `bitcoin` (bitcoind + node), `core` (node + signer), and
+`services` (API, mesh API, Postgres). The node joins each network only when
+it's present — everything talks to the node. bitcoind's RPC port is
 published loopback-only (unless the node is external and needs it
-off-host), so containers can't sidestep the split via `host.docker.internal`.
+off-host), so containers can't sidestep the split via
+`host.docker.internal`; the P2P port stays open on purpose — it exists to
+accept peers from anywhere.
 
 ## Secrets
 
