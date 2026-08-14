@@ -61,7 +61,9 @@ Containers are segmented across three docker networks so a compromised
 API-side container has no direct line to the signer or bitcoind: `bitcoin`
 (bitcoind + node), `core` (node + signer), and `services` (API, mesh API,
 Postgres). The node bridges all three — everything talks to it — and each
-network is only declared when it has members.
+network is only declared when it has members. bitcoind's RPC port is
+published loopback-only (unless the node is external and needs it
+off-host), so containers can't sidestep the split via `host.docker.internal`.
 
 ## Secrets
 

@@ -245,7 +245,18 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
             .replace('$', "$$")
         ),
     ];
-    svc.ports = vec![format!("{rpc}:{rpc}"), format!("{p2p}:{p2p}")];
+    // Loopback-bind the RPC port: every container carries a
+    // host.docker.internal alias, so a 0.0.0.0 publish would let API-side
+    // containers reach bitcoind through the host, bypassing the network
+    // split. Operators still get bitcoin-cli on localhost. Only an external
+    // node (running off-host) needs the wide binding. P2P stays open — it
+    // exists to accept peers.
+    let rpc_publish = if deployment.stacks_node.mode == ServiceMode::External {
+        format!("{rpc}:{rpc}")
+    } else {
+        format!("127.0.0.1:{rpc}:{rpc}")
+    };
+    svc.ports = vec![rpc_publish, format!("{p2p}:{p2p}")];
     svc.volumes = vec!["../chainstate/bitcoind:/home/bitcoin/.bitcoin".into()];
     svc.networks = vec![NET_BITCOIN.into()];
     svc
@@ -751,6 +762,24 @@ mod tests {
         let cfg = node_config_toml(&d);
         assert!(cfg.contains("username = \"stacksup\""));
         assert!(cfg.contains("password = \"test-btc-password\""));
+    }
+
+    #[test]
+    fn bitcoind_rpc_port_is_loopback_unless_node_is_external() {
+        // managed node talks over the docker network; the host publish is
+        // diagnostic only -> loopback (blocks the host.docker.internal bypass)
+        let s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let ports = bitcoind_service(&s).ports;
+        assert!(ports[0].starts_with("127.0.0.1:"), "got: {ports:?}");
+        assert!(!ports[1].starts_with("127.0.0.1:"), "p2p must accept peers");
+
+        // an off-host node needs the wide binding
+        let s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"",
+        );
+        assert!(!bitcoind_service(&s).ports[0].starts_with("127.0.0.1:"));
     }
 
     #[test]
