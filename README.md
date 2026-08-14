@@ -57,6 +57,12 @@ be configured to *push* to them; `stacksup config render` emits
 `rendered/apply-to-your-node.toml` with the exact blocks to add on your side,
 and `stacksup config check` verifies the loop is closed.
 
+Containers are segmented across three docker networks so a compromised
+API-side container has no direct line to the signer or bitcoind: `bitcoin`
+(bitcoind + node), `core` (node + signer), and `services` (API, mesh API,
+Postgres). The node bridges all three — everything talks to it — and each
+network is only declared when it has members.
+
 ## Secrets
 
 Credentials never live in `stacks.toml` — the tool rejects them there. They go

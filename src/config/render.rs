@@ -19,8 +19,12 @@ use crate::utils::services::*;
 
 pub const COMPOSE_PROJECT: &str = "stacks";
 
-/// The docker network every service in the stack joins.
-const COMPOSE_NETWORK: &str = "stacks";
+/// Docker networks, split so a compromised API-side container cannot reach
+/// the signer (or bitcoind) directly. Each service joins only the networks
+/// it needs; the node bridges all three because everything talks to it.
+const NET_BITCOIN: &str = "bitcoin"; // bitcoind + node
+const NET_CORE: &str = "core"; // node + signer
+const NET_SERVICES: &str = "services"; // api + mesh + postgres (+ node for RPC/events)
 
 /// Path of the compose file within a data dir.
 pub fn compose_file(data_dir: &Path) -> PathBuf {
@@ -96,7 +100,8 @@ impl ComposeService {
             image: image.into(),
             container_name,
             restart: "unless-stopped".into(),
-            networks: vec![COMPOSE_NETWORK.into()],
+            // Every builder sets its own network membership (least access).
+            networks: Vec::new(),
             // Lets managed services reach "external" services running on the
             // operator's localhost — a common setup that trips people up.
             extra_hosts: vec!["host.docker.internal:host-gateway".into()],
@@ -111,7 +116,7 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
 
     let mut compose = ComposeFile {
         services: BTreeMap::new(),
-        networks: BTreeMap::from([(COMPOSE_NETWORK.to_string(), None)]),
+        networks: BTreeMap::new(),
         secrets: BTreeMap::new(),
     };
 
@@ -193,6 +198,13 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
             .insert("postgres".into(), postgres_service(deployment));
     }
 
+    // Declare exactly the networks the rendered services joined.
+    for svc in compose.services.values() {
+        for net in &svc.networks {
+            compose.networks.entry(net.clone()).or_insert(None);
+        }
+    }
+
     let yaml = serde_yaml::to_string(&compose)?;
     std::fs::write(compose_file(data_dir), format!("{GENERATED_HEADER}{yaml}"))?;
 
@@ -218,7 +230,8 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
         "-rpcallowip=0.0.0.0/0".into(),
         // A salted hash — unlike -rpcpassword, safe to expose via docker
         // inspect. The plaintext lives in secrets.toml and the node's
-        // mounted Config.toml only.
+        // mounted Config.toml only. The `$` separating salt from digest must
+        // be `$$` in the compose file or interpolation swallows the digest.
         format!(
             "-rpcauth={}",
             secrets::bitcoind_rpcauth(
@@ -229,10 +242,12 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
                     .as_deref()
                     .unwrap_or_default(),
             )
+            .replace('$', "$$")
         ),
     ];
     svc.ports = vec![format!("{rpc}:{rpc}"), format!("{p2p}:{p2p}")];
     svc.volumes = vec!["../chainstate/bitcoind:/home/bitcoin/.bitcoin".into()];
+    svc.networks = vec![NET_BITCOIN.into()];
     svc
 }
 
@@ -260,6 +275,18 @@ fn node_service(deployment: &Deployment) -> ComposeService {
     if deployment.stacks_api.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-api".into());
     }
+    // Always on `core` (its home even with no signer); `bitcoin` only with a
+    // managed bitcoind; `services` only when an API-side consumer needs its
+    // RPC or receives its event pushes.
+    svc.networks = vec![NET_CORE.into()];
+    if deployment.bitcoind.mode == ServiceMode::Enabled {
+        svc.networks.insert(0, NET_BITCOIN.into());
+    }
+    if deployment.stacks_api.mode == ServiceMode::Enabled
+        || deployment.stacks_mesh_api.mode == ServiceMode::Enabled
+    {
+        svc.networks.push(NET_SERVICES.into());
+    }
     svc
 }
 
@@ -278,6 +305,7 @@ fn signer_service(deployment: &Deployment) -> ComposeService {
     if deployment.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
+    svc.networks = vec![NET_CORE.into()];
     svc
 }
 
@@ -288,6 +316,7 @@ fn api_service(deployment: &Deployment) -> ComposeService {
     if deployment.postgres.mode == ServiceMode::Enabled {
         svc.depends_on.push("postgres".into());
     }
+    svc.networks = vec![NET_SERVICES.into()];
     svc
 }
 
@@ -298,6 +327,7 @@ fn mesh_api_service(deployment: &Deployment) -> ComposeService {
     if deployment.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
     }
+    svc.networks = vec![NET_SERVICES.into()];
     svc
 }
 
@@ -317,6 +347,7 @@ fn postgres_major(deployment: &Deployment) -> Option<u32> {
 fn postgres_service(deployment: &Deployment) -> ComposeService {
     let mut svc = ComposeService::new("postgres", &postgres_image(deployment));
     svc.ports = vec![format!("{POSTGRES_PORT}:{POSTGRES_PORT}")];
+    svc.networks = vec![NET_SERVICES.into()];
     svc.environment.insert(
         "POSTGRES_USER".into(),
         deployment
@@ -723,6 +754,49 @@ mod tests {
     }
 
     #[test]
+    fn bitcoind_rpcauth_dollar_is_escaped_for_compose() {
+        let s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        let rpcauth = bitcoind_service(&s)
+            .command
+            .iter()
+            .find(|a| a.starts_with("-rpcauth="))
+            .unwrap()
+            .clone();
+        // `$$` survives compose interpolation as a literal `$`; a bare `$`
+        // would swallow the digest ("variable is not set" -> blank).
+        assert!(rpcauth.contains("$$"), "got: {rpcauth}");
+        assert!(!rpcauth.replace("$$", "").contains('$'));
+    }
+
+    #[test]
+    fn networks_isolate_signer_from_api_side() {
+        // Full mainnet stack: three networks, least membership everywhere.
+        let s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[stacks-mesh-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        assert_eq!(bitcoind_service(&s).networks, vec!["bitcoin"]);
+        // the node bridges all three — everything talks to it
+        assert_eq!(
+            node_service(&s).networks,
+            vec!["bitcoin", "core", "services"]
+        );
+        // the signer shares ONLY `core` with the node: unreachable from the
+        // api/mesh/postgres side, and no direct line to bitcoind
+        assert_eq!(signer_service(&s).networks, vec!["core"]);
+        assert_eq!(api_service(&s).networks, vec!["services"]);
+        assert_eq!(mesh_api_service(&s).networks, vec!["services"]);
+        assert_eq!(postgres_service(&s).networks, vec!["services"]);
+
+        // node alone: just `core`, no service networks dangling
+        let s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"external\"\nhost = \"h\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        assert_eq!(node_service(&s).networks, vec!["core"]);
+    }
+
+    #[test]
     fn apply_to_your_node_only_for_push_edges() {
         // external node + enabled api -> snippet with the api observer
         let s = deployment(
@@ -760,6 +834,10 @@ mod tests {
         }
         // testnet must NOT render a managed bitcoind
         assert!(!services.contains_key("bitcoind"));
+        // ... so only the networks with members are declared
+        let networks = compose["networks"].as_mapping().unwrap();
+        assert!(networks.contains_key("core") && networks.contains_key("services"));
+        assert!(!networks.contains_key("bitcoin"));
         assert!(dir.join("rendered/stacks-node/Config.toml").exists());
         assert!(dir.join("rendered/stacks-api/.env").exists());
         assert!(dir.join("chainstate/stacks-node").is_dir());
