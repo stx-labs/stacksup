@@ -8,14 +8,16 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use crate::config::render::{COMPOSE_PROJECT, compose_file};
+use crate::config::render::compose_file;
 use crate::config::{Deployment, ServiceMode};
 use crate::utils::services::roster;
 
 fn compose(data_dir: &Path) -> Command {
     let mut cmd = Command::new("docker");
-    cmd.args(["compose", "-p", COMPOSE_PROJECT, "-f"])
-        .arg(compose_file(data_dir));
+    // No -p: the rendered compose file carries its project via `name:`,
+    // so every invocation (ours or a bare `docker compose -f ...`) is scoped
+    // to this deployment.
+    cmd.args(["compose", "-f"]).arg(compose_file(data_dir));
     cmd
 }
 
@@ -359,9 +361,9 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(args[..4], ["compose", "-p", COMPOSE_PROJECT, "-f"]);
-        assert!(args[4].ends_with("rendered/docker-compose.yml"));
-        assert!(args[4].starts_with("/data"));
+        assert_eq!(args[..2], ["compose", "-f"]);
+        assert!(args[2].ends_with("rendered/docker-compose.yml"));
+        assert!(args[2].starts_with("/data"));
     }
 
     #[test]

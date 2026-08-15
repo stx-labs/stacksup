@@ -39,6 +39,18 @@ pub enum NodeRole {
 /// The deployment configuration. This is the root of the configuration and contains all the
 /// services and their configurations.
 pub struct Deployment {
+    /// Deployment name: becomes the compose project name and the container
+    /// name prefix, so several deployments can share a machine. Lowercase
+    /// alphanumerics and dashes. The default keeps the historical single-
+    /// deployment naming (project `stacks`, containers `stacks-node`, ...).
+    #[serde(default = "default_deployment_name")]
+    pub name: String,
+    /// Added to every published HOST port (container-internal ports never
+    /// change), so a second deployment can run beside the first:
+    /// `port_offset = 100` publishes the node RPC on 20543, the API on 4099,
+    /// postgres on 5532, and so on.
+    #[serde(default)]
+    pub port_offset: u16,
     /// Network name: a built-in definition (mainnet, testnet) or a custom definition file resolved
     /// relative to stacks.toml.
     pub network: String,
@@ -167,7 +179,22 @@ pub struct Postgres {
     pub password: Option<String>,
 }
 
+fn default_deployment_name() -> String {
+    "stacks".into()
+}
+
 impl Deployment {
+    /// The docker compose project (embedded in the rendered compose file as
+    /// its top-level `name:`), and the container-name prefix.
+    pub fn project(&self) -> &str {
+        &self.name
+    }
+
+    /// A service's host-published port: the base shifted by `port_offset`.
+    pub fn published(&self, base: u16) -> u16 {
+        base + self.port_offset
+    }
+
     /// Secret-bearing fields that must NOT be set in stacks.toml.
     fn config_secret_leaks(&self) -> Vec<(&'static str, &'static str)> {
         let mut leaks = Vec::new();
@@ -230,6 +257,33 @@ impl Deployment {
     pub fn validate(&self) -> (Vec<String>, Vec<String>) {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
+        // The name becomes a compose project and container-name prefix; keep
+        // it to the safe intersection of docker's naming rules.
+        if self.name.is_empty()
+            || self.name.len() > 32
+            || !self
+                .name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            || !self
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            errors.push(format!(
+                "name `{}` is invalid: 1-32 lowercase letters, digits, or dashes, starting with a letter or digit",
+                self.name
+            ));
+        }
+        // Highest published base port is the node p2p (20444); keep the
+        // shifted ports inside the u16 range with room to spare.
+        if self.port_offset > 40000 {
+            errors.push(format!(
+                "port_offset {} is too large (max 40000)",
+                self.port_offset
+            ));
+        }
         // A node needs a burnchain source: its own/external bitcoind, or the
         // network's hosted default endpoint.
         if self.stacks_node.mode == ServiceMode::Enabled
@@ -439,6 +493,11 @@ const DEFAULT_STACK_TOML: &str = r#"# stacksup config
 
 network = "testnet" # mainnet | testnet | custom network definition file
 
+# To run several deployments on one machine, give each a distinct name
+# (compose project + container prefix) and shift its published host ports:
+# name = "testnet-b"
+# port_offset = 100
+
 [bitcoind]
 # Only needed on mainnet. Testnet (krypton) follows the Hiro-hosted bitcoin
 # regtest.
@@ -604,6 +663,19 @@ mod tests {
             "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"",
         );
         assert!(w.iter().any(|m| m.contains("apply-to-your-node")));
+    }
+
+    #[test]
+    fn deployment_name_and_offset_are_validated() {
+        let e = errors("name = \"Bad_Name\"\nnetwork = \"testnet\"");
+        assert!(e.iter().any(|m| m.contains("name `Bad_Name` is invalid")));
+        let e = errors("name = \"-leading\"\nnetwork = \"testnet\"");
+        assert!(e.iter().any(|m| m.contains("is invalid")));
+        let e = errors("port_offset = 50000\nnetwork = \"testnet\"");
+        assert!(e.iter().any(|m| m.contains("port_offset")));
+        assert!(
+            errors("name = \"testnet-b\"\nport_offset = 100\nnetwork = \"testnet\"").is_empty()
+        );
     }
 
     #[test]

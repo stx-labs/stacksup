@@ -67,6 +67,24 @@ off-host), so containers can't sidestep the split via
 `host.docker.internal`; the P2P port stays open on purpose — it exists to
 accept peers from anywhere.
 
+## Running multiple deployments
+
+One machine can host several stacks side by side. Give each deployment its
+own directory (config + `--data-dir`), a distinct `name`, and a
+`port_offset`:
+
+```toml
+name = "testnet-b"   # compose project + container prefix (default: "stacks")
+port_offset = 100    # shifts every published HOST port; container-internal
+                     # ports and service wiring never change
+```
+
+With `port_offset = 100` the node RPC publishes on 20543, the API on 4099,
+postgres on 5532, and so on. The rendered compose file embeds the project
+name, so `stacksup` commands (and bare `docker compose -f` runs) are always
+scoped to the deployment whose directory you're in — `stop`, `logs`, and
+`chainstate wipe` can't touch a neighbour.
+
 ## Secrets
 
 Credentials never live in `stacks.toml` — the tool rejects them there. They go

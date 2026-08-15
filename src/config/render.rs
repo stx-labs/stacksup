@@ -17,7 +17,7 @@ use crate::config::{Deployment, ServiceMode};
 use crate::utils::secrets;
 use crate::utils::services::*;
 
-pub const COMPOSE_PROJECT: &str = "stacks";
+pub const DEFAULT_PROJECT: &str = "stacks";
 
 /// Docker networks, split so a compromised API-side container cannot reach
 /// the signer (or bitcoind) directly. Each service joins only the networks
@@ -50,6 +50,10 @@ const API_PG_SCHEMA: &str = "stacks_blockchain_api";
 
 #[derive(Serialize)]
 struct ComposeFile {
+    /// Compose project name, embedded so every `docker compose -f` invocation
+    /// (ours or the operator's) lands on this deployment's containers and
+    /// networks without a -p flag.
+    name: String,
     services: BTreeMap<String, ComposeService>,
     networks: BTreeMap<String, Option<()>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -88,13 +92,19 @@ struct ComposeService {
 }
 
 impl ComposeService {
-    fn new(name: &str, image: &str) -> Self {
-        // Namespace generic names (postgres, bitcoind) under the project
-        // prefix; stacks-* names are already unambiguous.
-        let container_name = if name.starts_with("stacks-") {
-            name.to_string()
+    fn new(deployment: &Deployment, name: &str, image: &str) -> Self {
+        let project = deployment.project();
+        // The default project keeps the historical names (stacks-* bare,
+        // generic ones prefixed). A named deployment prefixes everything —
+        // container names are a docker-wide namespace.
+        let container_name = if project == DEFAULT_PROJECT {
+            if name.starts_with("stacks-") {
+                name.to_string()
+            } else {
+                format!("{project}-{name}")
+            }
         } else {
-            format!("{COMPOSE_PROJECT}-{name}")
+            format!("{project}-{name}")
         };
         ComposeService {
             image: image.into(),
@@ -115,6 +125,7 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
 
     let mut compose = ComposeFile {
+        name: deployment.project().to_string(),
         services: BTreeMap::new(),
         networks: BTreeMap::new(),
         secrets: BTreeMap::new(),
@@ -221,7 +232,7 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
 fn bitcoind_service(deployment: &Deployment) -> ComposeService {
     let rpc = bitcoind_rpc_port(deployment);
     let p2p = bitcoind_p2p_port(deployment);
-    let mut svc = ComposeService::new("bitcoind", &bitcoind_image(deployment));
+    let mut svc = ComposeService::new(deployment, "bitcoind", &bitcoind_image(deployment));
     svc.command = vec![
         "-server=1".into(),
         "-txindex=0".into(),
@@ -252,18 +263,18 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
     // node (running off-host) needs the wide binding. P2P stays open — it
     // exists to accept peers.
     let rpc_publish = if deployment.stacks_node.mode == ServiceMode::External {
-        format!("{rpc}:{rpc}")
+        format!("{}:{rpc}", deployment.published(rpc))
     } else {
-        format!("127.0.0.1:{rpc}:{rpc}")
+        format!("127.0.0.1:{}:{rpc}", deployment.published(rpc))
     };
-    svc.ports = vec![rpc_publish, format!("{p2p}:{p2p}")];
+    svc.ports = vec![rpc_publish, format!("{}:{p2p}", deployment.published(p2p))];
     svc.volumes = vec!["../chainstate/bitcoind:/home/bitcoin/.bitcoin".into()];
     svc.networks = vec![NET_BITCOIN.into()];
     svc
 }
 
 fn node_service(deployment: &Deployment) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-node", &stacks_node_image(deployment));
+    let mut svc = ComposeService::new(deployment, "stacks-node", &stacks_node_image(deployment));
     svc.command = vec![
         "stacks-node".into(),
         "start".into(),
@@ -271,8 +282,8 @@ fn node_service(deployment: &Deployment) -> ComposeService {
         "/etc/stacks/Config.toml".into(),
     ];
     svc.ports = vec![
-        format!("{NODE_RPC_PORT}:{NODE_RPC_PORT}"),
-        format!("{NODE_P2P_PORT}:{NODE_P2P_PORT}"),
+        format!("{}:{NODE_RPC_PORT}", deployment.published(NODE_RPC_PORT)),
+        format!("{}:{NODE_P2P_PORT}", deployment.published(NODE_P2P_PORT)),
     ];
     svc.volumes = vec![
         "./stacks-node/Config.toml:/etc/stacks/Config.toml:ro".into(),
@@ -302,7 +313,11 @@ fn node_service(deployment: &Deployment) -> ComposeService {
 }
 
 fn signer_service(deployment: &Deployment) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-signer", &stacks_signer_image(deployment));
+    let mut svc = ComposeService::new(
+        deployment,
+        "stacks-signer",
+        &stacks_signer_image(deployment),
+    );
     svc.command = vec![
         "stacks-signer".into(),
         "run".into(),
@@ -321,8 +336,8 @@ fn signer_service(deployment: &Deployment) -> ComposeService {
 }
 
 fn api_service(deployment: &Deployment) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-api", &stacks_api_image(deployment));
-    svc.ports = vec![format!("{API_PORT}:{API_PORT}")];
+    let mut svc = ComposeService::new(deployment, "stacks-api", &stacks_api_image(deployment));
+    svc.ports = vec![format!("{}:{API_PORT}", deployment.published(API_PORT))];
     svc.env_file = vec!["./stacks-api/.env".into()];
     if deployment.postgres.mode == ServiceMode::Enabled {
         svc.depends_on.push("postgres".into());
@@ -332,8 +347,15 @@ fn api_service(deployment: &Deployment) -> ComposeService {
 }
 
 fn mesh_api_service(deployment: &Deployment) -> ComposeService {
-    let mut svc = ComposeService::new("stacks-mesh-api", &stacks_mesh_api_image(deployment));
-    svc.ports = vec![format!("{MESH_API_PORT}:{MESH_API_PORT}")];
+    let mut svc = ComposeService::new(
+        deployment,
+        "stacks-mesh-api",
+        &stacks_mesh_api_image(deployment),
+    );
+    svc.ports = vec![format!(
+        "{}:{MESH_API_PORT}",
+        deployment.published(MESH_API_PORT)
+    )];
     svc.env_file = vec!["./stacks-mesh-api/.env".into()];
     if deployment.stacks_node.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-node".into());
@@ -356,8 +378,11 @@ fn postgres_major(deployment: &Deployment) -> Option<u32> {
 }
 
 fn postgres_service(deployment: &Deployment) -> ComposeService {
-    let mut svc = ComposeService::new("postgres", &postgres_image(deployment));
-    svc.ports = vec![format!("{POSTGRES_PORT}:{POSTGRES_PORT}")];
+    let mut svc = ComposeService::new(deployment, "postgres", &postgres_image(deployment));
+    svc.ports = vec![format!(
+        "{}:{POSTGRES_PORT}",
+        deployment.published(POSTGRES_PORT)
+    )];
     svc.networks = vec![NET_SERVICES.into()];
     svc.environment.insert(
         "POSTGRES_USER".into(),
@@ -797,6 +822,44 @@ mod tests {
         // would swallow the digest ("variable is not set" -> blank).
         assert!(rpcauth.contains("$$"), "got: {rpcauth}");
         assert!(!rpcauth.replace("$$", "").contains('$'));
+    }
+
+    #[test]
+    fn named_deployment_prefixes_and_shifts_only_host_ports() {
+        let toml = "name = \"testnet-b\"\nport_offset = 100\nnetwork = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"";
+        let s = deployment(toml);
+        // container names get the project prefix — a docker-wide namespace
+        assert_eq!(node_service(&s).container_name, "testnet-b-stacks-node");
+        assert_eq!(postgres_service(&s).container_name, "testnet-b-postgres");
+        // host side shifts, container side doesn't
+        assert_eq!(node_service(&s).ports, vec!["20543:20443", "20544:20444"]);
+        assert_eq!(api_service(&s).ports, vec!["4099:3999"]);
+        assert_eq!(postgres_service(&s).ports, vec!["5532:5432"]);
+        // internal wiring is offset-blind: the API still reaches postgres
+        // and the node at their in-network ports
+        let env = api_env(&s);
+        assert!(env.contains("PG_PORT=5432"), "got: {env}");
+        assert!(!env.contains("5532"), "offset leaked into internal wiring");
+
+        // the default deployment keeps the historical naming and ports
+        let s = deployment(TESTNET_FULL);
+        assert_eq!(node_service(&s).container_name, "stacks-node");
+        assert_eq!(postgres_service(&s).container_name, "stacks-postgres");
+        assert_eq!(node_service(&s).ports[0], "20443:20443");
+    }
+
+    #[test]
+    fn compose_file_embeds_project_name() {
+        let dir = std::env::temp_dir().join(format!("stacksup-name-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = deployment(TESTNET_FULL);
+        s.name = "testnet-b".into();
+        render(&s, &dir).unwrap();
+        let compose: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(compose_file(&dir)).unwrap()).unwrap();
+        assert_eq!(compose["name"].as_str(), Some("testnet-b"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
