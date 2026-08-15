@@ -85,6 +85,12 @@ name, so `stacksup` commands (and bare `docker compose -f` runs) are always
 scoped to the deployment whose directory you're in — `stop`, `logs`, and
 `chainstate wipe` can't touch a neighbour.
 
+`stacksup start` refuses to run before doing damage when it detects a
+collision: it test-binds every port it is about to publish (pointing at
+`port_offset` when one is taken) and rejects a `name` already in use by a
+stack rendered from a different directory (which compose would otherwise
+silently adopt).
+
 ## Secrets
 
 Credentials never live in `stacks.toml` — the tool rejects them there. They go

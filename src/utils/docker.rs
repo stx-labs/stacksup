@@ -60,6 +60,101 @@ fn ensure_docker() -> Result<()> {
     Ok(())
 }
 
+/// Refuse to start when this deployment's name is already in use by a compose
+/// project rendered from a DIFFERENT directory — otherwise compose silently
+/// adopts (and replaces) the other deployment's containers.
+fn guard_project_collision(deployment: &Deployment, data_dir: &Path) -> Result<()> {
+    let out = Command::new("docker")
+        .args(["compose", "ls", "--all", "--format", "json"])
+        .output();
+    let Ok(out) = out else { return Ok(()) }; // best effort
+    let listing = String::from_utf8_lossy(&out.stdout);
+    if let Some(other) = project_conflict(&listing, deployment.project(), &compose_file(data_dir)) {
+        bail!(
+            "deployment name `{}` is already in use by a stack rendered from {other} — set a \
+             distinct `name` in stacks.toml (compose would otherwise adopt that stack's containers)",
+            deployment.project()
+        );
+    }
+    Ok(())
+}
+
+/// One row of `docker compose ls --format json`.
+#[derive(serde::Deserialize)]
+struct ComposeLsEntry {
+    #[serde(rename = "Name")]
+    name: String,
+    /// Comma-separated compose file paths.
+    #[serde(rename = "ConfigFiles", default)]
+    config_files: String,
+}
+
+/// Pure half of the collision check: does `ls_json` (docker compose ls
+/// output) contain `project` with a config file other than ours?
+fn project_conflict(ls_json: &str, project: &str, our_compose_file: &Path) -> Option<String> {
+    let ours = our_compose_file
+        .canonicalize()
+        .unwrap_or_else(|_| our_compose_file.to_path_buf());
+    let entries: Vec<ComposeLsEntry> = serde_json::from_str(ls_json).ok()?;
+    for e in entries {
+        if e.name != project {
+            continue;
+        }
+        // Any path matching ours means it's us.
+        let is_ours = e.config_files.split(',').map(str::trim).any(|f| {
+            Path::new(f)
+                .canonicalize()
+                .map(|p| p == ours)
+                .unwrap_or(f == ours.to_string_lossy())
+        });
+        if !is_ours && !e.config_files.is_empty() {
+            return Some(e.config_files);
+        }
+    }
+    None
+}
+
+/// A port conflicts only when a bind fails with AddrInUse on SOME family —
+/// an unsupported family (e.g. no IPv6) or a permission error is not a
+/// conflict. Mirrors how docker publishes on both stacks.
+fn port_taken(port: u16) -> bool {
+    ["0.0.0.0", "::"]
+        .iter()
+        .any(|ip| match std::net::TcpListener::bind((*ip, port)) {
+            Ok(_) => false,
+            Err(e) => e.kind() == std::io::ErrorKind::AddrInUse,
+        })
+}
+
+/// Test-bind every host port the deployment is about to publish, skipping
+/// services that are already running (their ports are legitimately ours).
+/// Catches port squatting BEFORE compose creates half a stack.
+fn guard_published_ports(
+    deployment: &Deployment,
+    data_dir: &Path,
+    only_service: Option<&str>,
+) -> Result<()> {
+    let running = running_services(data_dir).unwrap_or_default();
+    for (service, port) in crate::utils::services::published_ports(deployment) {
+        if running.iter().any(|r| r == service) {
+            continue;
+        }
+        if let Some(only) = only_service
+            && only != service
+        {
+            continue;
+        }
+        if port_taken(port) {
+            bail!(
+                "host port {port} (published by {service}) is already in use — another deployment \
+             or process owns it; set or raise `port_offset` in stacks.toml, or stop \
+             whatever holds the port"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Names of this stack's currently running compose services. Best effort:
 /// `None` when docker or the rendered compose file is unavailable.
 pub fn running_services(data_dir: &Path) -> Option<Vec<String>> {
@@ -164,6 +259,9 @@ pub fn start(deployment: &Deployment, data_dir: &Path, service: Option<&str>) ->
             compose_file(data_dir).display()
         );
     }
+
+    guard_project_collision(deployment, data_dir)?;
+    guard_published_ports(deployment, data_dir, service)?;
 
     if let Some(name) = service {
         ensure_enabled(deployment, name)?;
@@ -364,6 +462,52 @@ mod tests {
         assert_eq!(args[..2], ["compose", "-f"]);
         assert!(args[2].ends_with("rendered/docker-compose.yml"));
         assert!(args[2].starts_with("/data"));
+    }
+
+    #[test]
+    fn project_conflict_flags_other_directories_only() {
+        let ours = Path::new("/data/rendered/docker-compose.yml");
+        let ls = r#"[
+            {"Name": "stacks", "Status": "running(2)", "ConfigFiles": "/other/rendered/docker-compose.yml"},
+            {"Name": "testnet-b", "Status": "running(1)", "ConfigFiles": "/data/rendered/docker-compose.yml"}
+        ]"#;
+        // same name, different directory -> conflict
+        assert_eq!(
+            project_conflict(ls, "stacks", ours).as_deref(),
+            Some("/other/rendered/docker-compose.yml")
+        );
+        // same name, same file -> that's us, no conflict
+        assert!(project_conflict(ls, "testnet-b", ours).is_none());
+        // name not present -> no conflict
+        assert!(project_conflict(ls, "mainnet-c", ours).is_none());
+        // garbage json -> best effort, no conflict
+        assert!(project_conflict("not json", "stacks", ours).is_none());
+    }
+
+    #[test]
+    fn guard_published_ports_reports_taken_port() {
+        // hold a port, then ask the guard about a deployment that publishes
+        // it. Ephemeral ports are virtually always >= 32768, but re-roll to
+        // guarantee `taken - POSTGRES_PORT` can't underflow anywhere.
+        let (listener, taken) = loop {
+            let l = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+            let p = l.local_addr().unwrap().port();
+            if p >= crate::utils::services::POSTGRES_PORT {
+                break (l, p);
+            }
+        };
+        let mut d = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
+        // shift postgres (5432) onto the taken port
+        d.port_offset = taken - crate::utils::services::POSTGRES_PORT;
+        // data_dir without a compose file -> no services considered running
+        let err = guard_published_ports(&d, Path::new("/nonexistent"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&format!("host port {taken}")), "got: {err}");
+        assert!(err.contains("port_offset"));
+        // a free port passes
+        drop(listener);
+        assert!(guard_published_ports(&d, Path::new("/nonexistent"), None).is_ok());
     }
 
     #[test]

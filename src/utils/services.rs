@@ -142,6 +142,37 @@ pub fn roster(deployment: &Deployment) -> Vec<(&'static str, ServiceMode)> {
     ]
 }
 
+/// Every (service, host port) this deployment publishes when started —
+/// the base ports shifted by `port_offset`. Used by the start preflight to
+/// test-bind before compose does.
+pub fn published_ports(deployment: &Deployment) -> Vec<(&'static str, u16)> {
+    let mut ports = Vec::new();
+    if deployment.bitcoind.mode == ServiceMode::Enabled {
+        ports.push((
+            "bitcoind",
+            deployment.published(bitcoind_rpc_port(deployment)),
+        ));
+        ports.push((
+            "bitcoind",
+            deployment.published(bitcoind_p2p_port(deployment)),
+        ));
+    }
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
+        ports.push(("stacks-node", deployment.published(NODE_RPC_PORT)));
+        ports.push(("stacks-node", deployment.published(NODE_P2P_PORT)));
+    }
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
+        ports.push(("stacks-api", deployment.published(API_PORT)));
+    }
+    if deployment.stacks_mesh_api.mode == ServiceMode::Enabled {
+        ports.push(("stacks-mesh-api", deployment.published(MESH_API_PORT)));
+    }
+    if deployment.postgres.mode == ServiceMode::Enabled {
+        ports.push(("postgres", deployment.published(POSTGRES_PORT)));
+    }
+    ports
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
