@@ -79,30 +79,51 @@ fn guard_project_collision(deployment: &Deployment, data_dir: &Path) -> Result<(
     Ok(())
 }
 
+/// One row of `docker compose ls --format json`.
+#[derive(serde::Deserialize)]
+struct ComposeLsEntry {
+    #[serde(rename = "Name")]
+    name: String,
+    /// Comma-separated compose file paths.
+    #[serde(rename = "ConfigFiles", default)]
+    config_files: String,
+}
+
 /// Pure half of the collision check: does `ls_json` (docker compose ls
 /// output) contain `project` with a config file other than ours?
 fn project_conflict(ls_json: &str, project: &str, our_compose_file: &Path) -> Option<String> {
     let ours = our_compose_file
         .canonicalize()
         .unwrap_or_else(|_| our_compose_file.to_path_buf());
-    let entries: Vec<serde_json::Value> = serde_json::from_str(ls_json).ok()?;
+    let entries: Vec<ComposeLsEntry> = serde_json::from_str(ls_json).ok()?;
     for e in entries {
-        if e["Name"].as_str() != Some(project) {
+        if e.name != project {
             continue;
         }
-        // ConfigFiles is comma-separated; any path matching ours means it's us.
-        let files = e["ConfigFiles"].as_str().unwrap_or_default();
-        let is_ours = files.split(',').map(str::trim).any(|f| {
+        // Any path matching ours means it's us.
+        let is_ours = e.config_files.split(',').map(str::trim).any(|f| {
             Path::new(f)
                 .canonicalize()
                 .map(|p| p == ours)
                 .unwrap_or(f == ours.to_string_lossy())
         });
-        if !is_ours && !files.is_empty() {
-            return Some(files.to_string());
+        if !is_ours && !e.config_files.is_empty() {
+            return Some(e.config_files);
         }
     }
     None
+}
+
+/// A port conflicts only when a bind fails with AddrInUse on SOME family —
+/// an unsupported family (e.g. no IPv6) or a permission error is not a
+/// conflict. Mirrors how docker publishes on both stacks.
+fn port_taken(port: u16) -> bool {
+    ["0.0.0.0", "::"]
+        .iter()
+        .any(|ip| match std::net::TcpListener::bind((*ip, port)) {
+            Ok(_) => false,
+            Err(e) => e.kind() == std::io::ErrorKind::AddrInUse,
+        })
 }
 
 /// Test-bind every host port the deployment is about to publish, skipping
@@ -123,7 +144,7 @@ fn guard_published_ports(
         {
             continue;
         }
-        if std::net::TcpListener::bind(("0.0.0.0", port)).is_err() {
+        if port_taken(port) {
             bail!(
                 "host port {port} (published by {service}) is already in use — another deployment \
              or process owns it; set or raise `port_offset` in stacks.toml, or stop \
@@ -465,9 +486,16 @@ mod tests {
 
     #[test]
     fn guard_published_ports_reports_taken_port() {
-        // hold a port, then ask the guard about a deployment that publishes it
-        let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
-        let taken = listener.local_addr().unwrap().port();
+        // hold a port, then ask the guard about a deployment that publishes
+        // it. Ephemeral ports are virtually always >= 32768, but re-roll to
+        // guarantee `taken - POSTGRES_PORT` can't underflow anywhere.
+        let (listener, taken) = loop {
+            let l = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+            let p = l.local_addr().unwrap().port();
+            if p >= crate::utils::services::POSTGRES_PORT {
+                break (l, p);
+            }
+        };
         let mut d = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
         // shift postgres (5432) onto the taken port
         d.port_offset = taken - crate::utils::services::POSTGRES_PORT;
