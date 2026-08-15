@@ -399,7 +399,10 @@ impl Deployment {
                 ServiceMode::External => {
                     warnings.push(
                         "signer is managed but the node is external: apply `rendered/apply-to-your-node.toml` \
-                         to your node (stacker = true, matching auth_password, signer events_observer)"
+                         to your node (stacker = true, matching auth_password, signer events_observer). \
+                         Note: the signer's event endpoint (port 30000) is not published on this host — \
+                         an off-host node cannot push to it; run the node on this machine or expose the \
+                         port yourself (compose override)"
                             .into(),
                     );
                 }
@@ -414,7 +417,9 @@ impl Deployment {
         {
             warnings.push(
                 "stacks-api is managed but the node is external: add the [[events_observer]] block \
-                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacksup config check`"
+                 from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacksup config check`. \
+                 Note: the API's event port (3700) is not published on this host — an off-host node \
+                 cannot push to it; run the node on this machine or expose the port yourself (compose override)"
                     .into(),
             );
         }
@@ -674,6 +679,24 @@ mod tests {
             "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"",
         );
         assert!(w.iter().any(|m| m.contains("apply-to-your-node")));
+    }
+
+    #[test]
+    fn external_node_with_managed_receivers_warns_about_unpublished_ports() {
+        let w = warnings(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        assert!(
+            w.iter().any(|m| m.contains("event port (3700)")),
+            "got: {w:?}"
+        );
+        let w = warnings(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"external\"\nrpc_host = \"h\"\n[stacks-signer]\nmode = \"enabled\"",
+        );
+        assert!(
+            w.iter().any(|m| m.contains("event endpoint (port 30000)")),
+            "got: {w:?}"
+        );
     }
 
     #[test]
