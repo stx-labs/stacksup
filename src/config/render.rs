@@ -17,7 +17,7 @@ use crate::config::{Deployment, ServiceMode};
 use crate::utils::secrets;
 use crate::utils::services::*;
 
-pub const DEFAULT_PROJECT: &str = "stacks";
+pub use crate::config::DEFAULT_PROJECT;
 
 /// Docker networks, split so a compromised API-side container cannot reach
 /// the signer (or bitcoind) directly. Each service joins only the networks

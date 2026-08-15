@@ -58,7 +58,9 @@ pub fn run(deployment: &Deployment) -> Result<()> {
 
     println!("\nconnectivity");
     // External services are checked from the host at their configured port.
-    // Managed services publish on localhost shifted by port_offset.
+    // Managed services are probed via 127.0.0.1 at their published (offset)
+    // port — reachable there whether the mapping binds loopback or all
+    // interfaces.
     let probe_port = |mode: ServiceMode, base: u16| match mode {
         ServiceMode::Enabled => deployment.published(base),
         _ => base,

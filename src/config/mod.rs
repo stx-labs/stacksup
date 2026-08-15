@@ -179,8 +179,12 @@ pub struct Postgres {
     pub password: Option<String>,
 }
 
+/// The default deployment name: compose project `stacks` and the historical
+/// container names. Render-time naming branches on this same constant.
+pub const DEFAULT_PROJECT: &str = "stacks";
+
 fn default_deployment_name() -> String {
-    "stacks".into()
+    DEFAULT_PROJECT.into()
 }
 
 impl Deployment {
@@ -191,8 +195,15 @@ impl Deployment {
     }
 
     /// A service's host-published port: the base shifted by `port_offset`.
+    /// Validation bounds the offset, but guard the addition anyway so an
+    /// unvalidated path can never wrap around the u16 range silently.
     pub fn published(&self, base: u16) -> u16 {
-        base + self.port_offset
+        base.checked_add(self.port_offset).unwrap_or_else(|| {
+            panic!(
+                "port {base} + port_offset {} exceeds 65535 — lower port_offset in stacks.toml",
+                self.port_offset
+            )
+        })
     }
 
     /// Secret-bearing fields that must NOT be set in stacks.toml.
