@@ -57,8 +57,14 @@ pub fn run(deployment: &Deployment) -> Result<()> {
     }
 
     println!("\nconnectivity");
-    // External services are checked from the host. Managed services publish
-    // their ports on localhost, so they are checkable the same way once up.
+    // External services are checked from the host at their configured port.
+    // Managed services are probed via 127.0.0.1 at their published (offset)
+    // port — reachable there whether the mapping binds loopback or all
+    // interfaces.
+    let probe_port = |mode: ServiceMode, base: u16| match mode {
+        ServiceMode::Enabled => deployment.published(base),
+        _ => base,
+    };
     check_tcp(
         &mut r,
         "bitcoind rpc",
@@ -66,7 +72,7 @@ pub fn run(deployment: &Deployment) -> Result<()> {
             deployment.bitcoind.mode,
             deployment.bitcoind.host.as_deref(),
         ),
-        bitcoind_rpc_port(deployment),
+        probe_port(deployment.bitcoind.mode, bitcoind_rpc_port(deployment)),
     );
     check_tcp(
         &mut r,
@@ -75,7 +81,7 @@ pub fn run(deployment: &Deployment) -> Result<()> {
             deployment.stacks_node.mode,
             deployment.stacks_node.rpc_host.as_deref(),
         ),
-        node_rpc_port(deployment),
+        probe_port(deployment.stacks_node.mode, node_rpc_port(deployment)),
     );
     check_tcp(
         &mut r,
@@ -84,7 +90,7 @@ pub fn run(deployment: &Deployment) -> Result<()> {
             deployment.postgres.mode,
             deployment.postgres.host.as_deref(),
         ),
-        postgres_port(deployment),
+        probe_port(deployment.postgres.mode, postgres_port(deployment)),
     );
     check_tcp(
         &mut r,
@@ -93,7 +99,10 @@ pub fn run(deployment: &Deployment) -> Result<()> {
             deployment.stacks_api.mode,
             deployment.stacks_api.host.as_deref(),
         ),
-        deployment.stacks_api.port.unwrap_or(API_PORT),
+        probe_port(
+            deployment.stacks_api.mode,
+            deployment.stacks_api.port.unwrap_or(API_PORT),
+        ),
     );
 
     println!("\nchain");
@@ -147,7 +156,12 @@ fn check_node_info(r: &mut Report, deployment: &Deployment) {
         },
         ServiceMode::Disabled => return r.skip("stacks-node /v2/info: node is disabled"),
     };
-    let url = format!("http://{host}:{}/v2/info", node_rpc_port(deployment));
+    let port = match deployment.stacks_node.mode {
+        // published (offset) port when we run the node; configured as-is when external
+        ServiceMode::Enabled => deployment.published(node_rpc_port(deployment)),
+        _ => node_rpc_port(deployment),
+    };
+    let url = format!("http://{host}:{port}/v2/info");
     match ureq::get(&url).timeout(CONNECT_TIMEOUT).call() {
         Ok(resp) => match resp.into_json::<serde_json::Value>() {
             Ok(info) => {

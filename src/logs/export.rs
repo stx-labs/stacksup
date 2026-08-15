@@ -324,6 +324,27 @@ mod tests {
     }
 
     #[test]
+    fn redacts_both_rpcauth_spellings() {
+        // Bundles include node config (plain `$`) AND the compose file
+        // (compose-escaped `$$`) — the verifier must vanish from both.
+        let mut d = crate::config::test_deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        d.bitcoind.rpc_user = Some("rafa1234".into());
+        d.bitcoind.rpc_password = Some("btc-pass-1234".into());
+        let secrets = secret_values(&d);
+        let rpcauth = crate::utils::secrets::bitcoind_rpcauth("rafa1234", "btc-pass-1234");
+        let text = format!(
+            "config: -rpcauth={rpcauth}\ncompose: -rpcauth={}\n",
+            rpcauth.replace('$', "$$")
+        );
+        let out = redact(&text, &secrets);
+        let digest = rpcauth.split('$').next_back().unwrap();
+        assert!(!out.contains(digest), "digest survived: {out}");
+        assert!(!out.contains("rafa1234"), "username survived: {out}");
+    }
+
+    #[test]
     fn copies_tree_with_redaction() {
         let src = std::env::temp_dir().join(format!("stacksup-export-src-{}", std::process::id()));
         let dst = std::env::temp_dir().join(format!("stacksup-export-dst-{}", std::process::id()));
