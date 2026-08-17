@@ -843,7 +843,7 @@ mod tests {
         // internal wiring is offset-blind: the API still reaches postgres
         // and the node at their in-network ports
         let env = api_env(&s);
-        assert!(env.contains("PG_PORT=5432"), "got: {env}");
+        assert!(env.contains("PG_PORT=5432"));
         assert!(!env.contains("5532"), "offset leaked into internal wiring");
 
         // the default deployment keeps the historical naming and ports
