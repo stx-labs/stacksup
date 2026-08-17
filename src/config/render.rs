@@ -147,9 +147,10 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     if deployment.stacks_node.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-node")?;
         std::fs::create_dir_all(dir.join("stacks-node"))?;
-        std::fs::write(
-            dir.join("stacks-node/Config.toml"),
-            format!("{GENERATED_HEADER}{}", node_config_toml(deployment)),
+        // Carries the bitcoind rpc password and node auth token -> 0600.
+        secrets::write_0600(
+            &dir.join("stacks-node/Config.toml"),
+            &format!("{GENERATED_HEADER}{}", node_config_toml(deployment)),
         )?;
         compose
             .services
@@ -159,9 +160,10 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     if deployment.stacks_signer.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-signer")?;
         std::fs::create_dir_all(dir.join("stacks-signer"))?;
-        std::fs::write(
-            dir.join("stacks-signer/signer.toml"),
-            format!("{GENERATED_HEADER}{}", signer_config_toml(deployment)),
+        // Carries the node auth token (auth_password) -> 0600.
+        secrets::write_0600(
+            &dir.join("stacks-signer/signer.toml"),
+            &format!("{GENERATED_HEADER}{}", signer_config_toml(deployment)),
         )?;
         compose
             .services
@@ -170,9 +172,10 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
 
     if deployment.stacks_api.mode == ServiceMode::Enabled {
         std::fs::create_dir_all(dir.join("stacks-api"))?;
-        std::fs::write(
-            dir.join("stacks-api/.env"),
-            format!("{GENERATED_HEADER}{}", api_env(deployment)),
+        // Carries PG_PASSWORD and the node auth token -> 0600.
+        secrets::write_0600(
+            &dir.join("stacks-api/.env"),
+            &format!("{GENERATED_HEADER}{}", api_env(deployment)),
         )?;
         compose
             .services
@@ -181,9 +184,10 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
 
     if deployment.stacks_mesh_api.mode == ServiceMode::Enabled {
         std::fs::create_dir_all(dir.join("stacks-mesh-api"))?;
-        std::fs::write(
-            dir.join("stacks-mesh-api/.env"),
-            format!("{GENERATED_HEADER}{}", mesh_api_env(deployment)),
+        // Carries the node auth token -> 0600.
+        secrets::write_0600(
+            &dir.join("stacks-mesh-api/.env"),
+            &format!("{GENERATED_HEADER}{}", mesh_api_env(deployment)),
         )?;
         compose
             .services
@@ -223,7 +227,8 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     if deployment.stacks_node.mode == ServiceMode::External
         && let Some(snippet) = apply_to_your_node(deployment)
     {
-        std::fs::write(dir.join("apply-to-your-node.toml"), snippet)?;
+        // Carries the node auth token -> 0600.
+        secrets::write_0600(&dir.join("apply-to-your-node.toml"), &snippet)?;
     }
 
     Ok(dir)
@@ -838,7 +843,7 @@ mod tests {
         // internal wiring is offset-blind: the API still reaches postgres
         // and the node at their in-network ports
         let env = api_env(&s);
-        assert!(env.contains("PG_PORT=5432"), "got: {env}");
+        assert!(env.contains("PG_PORT=5432"));
         assert!(!env.contains("5532"), "offset leaked into internal wiring");
 
         // the default deployment keeps the historical naming and ports
@@ -846,6 +851,26 @@ mod tests {
         assert_eq!(node_service(&s).container_name, "stacks-node");
         assert_eq!(postgres_service(&s).container_name, "stacks-postgres");
         assert_eq!(node_service(&s).ports[0], "20443:20443");
+    }
+
+    #[test]
+    fn secret_bearing_rendered_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("stacksup-perm-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        render(&deployment(TESTNET_FULL), &dir).unwrap();
+        for f in [
+            "rendered/stacks-node/Config.toml",
+            "rendered/stacks-signer/signer.toml",
+            "rendered/stacks-api/.env",
+            "rendered/stacks-mesh-api/.env",
+            "rendered/secrets/pg_password",
+        ] {
+            let mode = std::fs::metadata(dir.join(f)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{f} should be 0600");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
