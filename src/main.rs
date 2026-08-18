@@ -1,13 +1,8 @@
 mod chainstate;
 mod config;
-mod docker;
-mod doctor;
-mod download;
-mod export;
-mod render;
-mod services;
+mod logs;
 mod upgrade;
-mod versions;
+mod utils;
 
 use std::path::PathBuf;
 
@@ -126,10 +121,10 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum ChainstateCommand {
-    /// Permanently delete on-disk chainstate — asks for confirmation first
+    /// Permanently delete on-disk chainstate, asks for confirmation first
     Wipe {
-        /// Single service's state to wipe (bitcoind, stacks-node,
-        /// stacks-signer, postgres); omit to wipe everything
+        /// Single service's state to wipe (bitcoind, stacks-node, stacks-signer, postgres); omit to
+        /// wipe everything
         service: Option<String>,
         /// Skip the confirmation prompt (for scripts)
         #[arg(long)]
@@ -142,9 +137,8 @@ enum ChainstateCommand {
         /// Which service's archive to fetch
         #[arg(long, value_enum, default_value_t = ServiceArg::All)]
         service: ServiceArg,
-        /// Specific archive: a filename (resolved against the network's
-        /// archive path), a full URL, or a local file path. Requires
-        /// --service node or --service api.
+        /// Specific archive: a filename (resolved against the network's archive path), a full URL,
+        /// or a local file path. Requires --service node or --service api.
         #[arg(long)]
         archive: Option<String>,
         /// Print the plan (sizes, versions, disk) and exit
@@ -162,6 +156,9 @@ enum ChainstateCommand {
         /// Keep downloaded archives after a successful restore
         #[arg(long)]
         keep_archives: bool,
+        /// Start the deployment (render + `stacksup start`) once the chainstate is restored
+        #[arg(long)]
+        start: bool,
     },
 }
 
@@ -174,8 +171,8 @@ enum ServiceArg {
 
 fn main() {
     if let Err(e) = run() {
-        // `{e:#}` renders the whole context chain on one line; colored
-        // degrades to plain text when stderr isn't a terminal.
+        // `{e:#}` renders the whole context chain on one line; colored degrades to plain text when
+        // stderr isn't a terminal.
         eprintln!("{}", format!("Error: {e:#}").red());
         std::process::exit(1);
     }
@@ -188,14 +185,14 @@ fn run() -> Result<()> {
         Command::Config { command } => match command {
             ConfigCommand::Init { force } => config::init(force),
             ConfigCommand::Render => {
-                let stack = config::load(&cli.config)?;
-                let dir = render::render(&stack, &cli.data_dir)?;
+                let deployment = config::load(&cli.config)?;
+                let dir = config::render::render(&deployment, &cli.data_dir)?;
                 println!("Rendered service configs to {}/", dir.display());
                 Ok(())
             }
             ConfigCommand::Check => {
-                let stack = config::load(&cli.config)?;
-                doctor::run(&stack)
+                let deployment = config::load(&cli.config)?;
+                config::check::run(&deployment)
             }
         },
         Command::Logs { service, command } => match command {
@@ -205,12 +202,12 @@ fn run() -> Result<()> {
                 logs_only,
                 out,
             }) => {
-                let stack = config::load(&cli.config)?;
-                export::run(
-                    &stack,
+                let deployment = config::load(&cli.config)?;
+                logs::export::run(
+                    &deployment,
                     &cli.config,
                     &cli.data_dir,
-                    export::Opts {
+                    logs::export::Opts {
                         service,
                         since,
                         logs_only,
@@ -219,48 +216,48 @@ fn run() -> Result<()> {
                 )
             }
             None => {
-                let stack = config::load(&cli.config)?;
-                docker::logs(&stack, &cli.data_dir, service.as_deref())
+                let deployment = config::load(&cli.config)?;
+                utils::docker::logs(&deployment, &cli.data_dir, service.as_deref())
             }
         },
         Command::Start { service, no_render } => {
-            let stack = config::load(&cli.config)?;
+            let deployment = config::load(&cli.config)?;
             if !no_render {
-                render::render(&stack, &cli.data_dir)?;
+                config::render::render(&deployment, &cli.data_dir)?;
             }
-            docker::start(&stack, &cli.data_dir, service.as_deref())
+            utils::docker::start(&deployment, &cli.data_dir, service.as_deref())
         }
         Command::Stop { service, destroy } => {
-            let stack = config::load(&cli.config)?;
-            docker::stop(&stack, &cli.data_dir, service.as_deref(), destroy)
+            let deployment = config::load(&cli.config)?;
+            utils::docker::stop(&deployment, &cli.data_dir, service.as_deref(), destroy)
         }
         Command::Restart { service, no_render } => {
-            let stack = config::load(&cli.config)?;
+            let deployment = config::load(&cli.config)?;
             if !no_render {
-                render::render(&stack, &cli.data_dir)?;
+                config::render::render(&deployment, &cli.data_dir)?;
             }
-            docker::restart(&stack, &cli.data_dir, service.as_deref())
+            utils::docker::restart(&deployment, &cli.data_dir, service.as_deref())
         }
         Command::Pull => {
-            let stack = config::load(&cli.config)?;
-            render::render(&stack, &cli.data_dir)?;
-            docker::pull(&stack, &cli.data_dir)
+            let deployment = config::load(&cli.config)?;
+            config::render::render(&deployment, &cli.data_dir)?;
+            utils::docker::pull(&deployment, &cli.data_dir)
         }
         Command::Upgrade { service } => {
-            let stack = config::load(&cli.config)?;
-            upgrade::run(&stack, service.as_deref())
+            let deployment = config::load(&cli.config)?;
+            upgrade::run(&deployment, service.as_deref())
         }
         Command::Status => {
-            let stack = config::load(&cli.config)?;
-            docker::status(&stack, &cli.data_dir)
+            let deployment = config::load(&cli.config)?;
+            utils::docker::status(&deployment, &cli.data_dir)
         }
         Command::Chainstate { command } => match command {
             ChainstateCommand::Wipe { service, yes } => {
                 chainstate::wipe(&cli.data_dir, service.as_deref(), yes)
             }
             ChainstateCommand::Status => {
-                let stack = config::load(&cli.config)?;
-                chainstate::status(&stack, &cli.data_dir)
+                let deployment = config::load(&cli.config)?;
+                chainstate::status(&deployment, &cli.data_dir)
             }
             ChainstateCommand::Download {
                 service,
@@ -270,22 +267,33 @@ fn run() -> Result<()> {
                 no_verify,
                 skip_version_check,
                 keep_archives,
+                start,
             } => {
                 let service = match service {
-                    ServiceArg::Node => download::ServiceSel::Node,
-                    ServiceArg::Api => download::ServiceSel::Api,
-                    ServiceArg::All => download::ServiceSel::All,
+                    ServiceArg::Node => chainstate::download::ServiceSel::Node,
+                    ServiceArg::Api => chainstate::download::ServiceSel::Api,
+                    ServiceArg::All => chainstate::download::ServiceSel::All,
                 };
-                if archive.is_some() && matches!(service, download::ServiceSel::All) {
+                if archive.is_some() && matches!(service, chainstate::download::ServiceSel::All) {
                     anyhow::bail!(
                         "--archive requires exactly one service: --service node or --service api"
                     );
                 }
-                let stack = config::load(&cli.config)?;
-                download::run(
-                    &stack,
+                if start && check_only {
+                    anyhow::bail!("--start cannot be combined with --check-only");
+                }
+                let deployment = config::load(&cli.config)?;
+                if start {
+                    // Render BEFORE the restore: the API restore runs
+                    // pg_restore through the compose postgres service, which
+                    // needs rendered/docker-compose.yml — on a fresh setup
+                    // nothing has rendered it yet.
+                    config::render::render(&deployment, &cli.data_dir)?;
+                }
+                let restored = chainstate::download::run(
+                    &deployment,
                     &cli.data_dir,
-                    download::Opts {
+                    chainstate::download::Opts {
                         service,
                         archive,
                         check_only,
@@ -293,9 +301,28 @@ fn run() -> Result<()> {
                         no_verify,
                         skip_version_check,
                         keep_archives,
+                        start,
                     },
-                )
+                )?;
+                if start && restored {
+                    println!("\nStarting the deployment.");
+                    utils::docker::start(&deployment, &cli.data_dir, None)?;
+                }
+                Ok(())
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// clap's built-in validation of the whole CLI definition: conflicting flags, bad defaults,
+    /// ambiguous subcommands all panic here.
+    #[test]
+    fn cli_definition_is_coherent() {
+        Cli::command().debug_assert();
     }
 }

@@ -1,5 +1,7 @@
-//! `stacksup chainstate` — operations on the stack's on-disk state.
+//! `stacksup chainstate`. Operations on the stack's on-disk state.
 //! More subcommands (snapshot, restore, ...) will land here.
+
+pub mod download;
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -8,7 +10,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use crate::config::{Network, ServiceMode, Stack};
+use crate::config::{Deployment, ServiceMode};
 
 /// One service's view of the chain: (stacks height, bitcoin height).
 struct Tip {
@@ -19,24 +21,26 @@ struct Tip {
     note: Option<String>,
 }
 
-/// `stacksup chainstate status` — compare every enabled service's chain tip.
+/// `stacksup chainstate status`. Compare every enabled service's chain tip.
 ///
-/// Works whether the stack is running or stopped, with different coverage:
-/// the node's tips are read straight from its sqlite files (safe read-only
-/// even while the node writes), while the API's tip lives in Postgres and
-/// bitcoind's in LevelDB — those two are only checkable while running.
-pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
-    let running = crate::docker::running_services(data_dir).unwrap_or_default();
+/// Works whether the stack is running or stopped, with different coverage: the node's tips are read
+/// straight from its sqlite files (safe read-only even while the node writes), while the API's tip
+/// lives in Postgres and bitcoind's in LevelDB — those two are only checkable while running.
+pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
+    let running = crate::utils::docker::running_services(data_dir).unwrap_or_default();
     let mut tips: Vec<Tip> = Vec::new();
 
-    if stack.stacks_node.mode == ServiceMode::Enabled {
-        tips.push(node_tip(stack, data_dir));
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
+        tips.push(node_tip(deployment, data_dir));
     }
-    if stack.bitcoind.mode == ServiceMode::Enabled {
-        tips.push(bitcoind_tip(stack, running.iter().any(|s| s == "bitcoind")));
+    if deployment.bitcoind.mode == ServiceMode::Enabled {
+        tips.push(bitcoind_tip(
+            deployment,
+            running.iter().any(|s| s == "bitcoind"),
+        ));
     }
-    if stack.stacks_api.mode == ServiceMode::Enabled {
-        tips.push(api_tip(stack, running.iter().any(|s| s == "postgres")));
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
+        tips.push(api_tip(deployment, running.iter().any(|s| s == "postgres")));
     }
 
     if tips.is_empty() {
@@ -61,8 +65,8 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
         }
     }
 
-    // Verdict: what matters is the stacks height of the node vs the API,
-    // and crucially WHICH ONE is ahead — the failure modes are asymmetric.
+    // Verdict: what matters is the stacks height of the node vs the API, and crucially WHICH ONE is
+    // ahead, the failure modes are asymmetric.
     let node_stacks = tips
         .iter()
         .find(|t| t.service == "stacks-node")
@@ -110,19 +114,15 @@ pub fn status(stack: &Stack, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The node's canonical view, read from its on-disk sqlite DBs (read-only
-/// opens are safe while the node runs).
+/// The node's canonical view, read from its on-disk sqlite DBs (read-only opens are safe while the
+/// node runs).
 ///
-/// Bitcoin height: latest pox-valid snapshot in the sortition DB. Stacks
-/// height: MAX over the chainstate headers DB (nakamoto_block_headers +
-/// epoch2 block_headers) — NOT the sortition snapshot's
-/// canonical_stacks_tip_height, which only advances per *burn* block and so
-/// lags by up to a tenure's worth of stacks blocks post-Nakamoto.
-fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
-    let mode = match stack.network {
-        Network::Mainnet => "mainnet",
-        Network::Testnet => "krypton",
-    };
+/// Bitcoin height: latest pox-valid snapshot in the sortition DB. Stacks height: MAX over the
+/// chainstate headers DB (nakamoto_block_headers + epoch2 block_headers), NOT the sortition
+/// snapshot's canonical_stacks_tip_height, which only advances per *burn* block and so lags by up
+/// to a tenure's worth of stacks blocks post-Nakamoto.
+fn node_tip(deployment: &Deployment, data_dir: &Path) -> Tip {
+    let mode = deployment.net.node.burnchain_mode.as_str();
     let node_dir = data_dir.join("chainstate/stacks-node").join(mode);
     let sort_db = node_dir.join("burnchain/sortition/marf.sqlite");
     let headers_db = node_dir.join("chainstate/vm/index.sqlite");
@@ -178,9 +178,9 @@ fn node_tip(stack: &Stack, data_dir: &Path) -> Tip {
     tip
 }
 
-/// bitcoind's own height via bitcoin-cli inside the running container.
-/// Offline its state is LevelDB, which we don't parse.
-fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
+/// bitcoind's own height via bitcoin-cli inside the running container. Offline its state is
+/// LevelDB, which we don't parse.
+fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
     let mut tip = Tip {
         service: "bitcoind",
         source: "bitcoin-cli (running container)".into(),
@@ -193,25 +193,15 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
             Some("bitcoind is not running — height in LevelDB is not readable offline".into());
         return tip;
     }
-    let chain = if stack.network == Network::Mainnet {
-        "main"
-    } else {
-        "test"
-    };
+    let chain = deployment.net.bitcoind.chain.as_str();
+    // bitcoin-cli inside the container authenticates via the datadir cookie file, no credentials
+    // needed (and none appear in process args).
     let out = Command::new("docker")
         .args([
             "exec",
             "stacks-bitcoind",
             "bitcoin-cli",
             &format!("-chain={chain}"),
-            &format!(
-                "-rpcuser={}",
-                stack.bitcoind.rpc_user.as_deref().unwrap_or("stacks")
-            ),
-            &format!(
-                "-rpcpassword={}",
-                stack.bitcoind.rpc_password.as_deref().unwrap_or("stacks")
-            ),
             "getblockcount",
         ])
         .output();
@@ -230,9 +220,9 @@ fn bitcoind_tip(stack: &Stack, running: bool) -> Tip {
     tip
 }
 
-/// The API's indexed tip from its Postgres chain_tip table (single-row table
-/// with block_height and burn_block_height). Needs the postgres server up.
-fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
+/// The API's indexed tip from its Postgres chain_tip table (single-row table with block_height and
+/// burn_block_height). Needs the postgres server up.
+fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
     let mut tip = Tip {
         service: "stacks-api",
         source: "postgres chain_tip table".into(),
@@ -240,7 +230,7 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
         bitcoin: None,
         note: None,
     };
-    if stack.postgres.mode != ServiceMode::Enabled {
+    if deployment.postgres.mode != ServiceMode::Enabled {
         tip.note = Some("API uses an external/disabled postgres — not checked by this tool".into());
         return tip;
     }
@@ -248,7 +238,7 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
         tip.note = Some("postgres is not running — `stacksup start` to check the API's tip".into());
         return tip;
     }
-    let user = stack.postgres.user.as_deref().unwrap_or("postgres");
+    let user = deployment.postgres.user.as_deref().unwrap_or("postgres");
     let out = Command::new("docker")
         .args([
             "exec",
@@ -283,9 +273,8 @@ fn api_tip(stack: &Stack, postgres_running: bool) -> Tip {
     tip
 }
 
-/// Services that keep on-disk state under chainstate/, with the running
-/// services that would be corrupted by wiping it out from under them
-/// (stacks-api writes into postgres's data).
+/// Services that keep on-disk state under chainstate/, with the running services that would be
+/// corrupted by wiping it out from under them (stacks-api writes into postgres's data).
 const CHAINSTATE_SERVICES: &[(&str, &[&str])] = &[
     ("bitcoind", &["bitcoind"]),
     ("stacks-node", &["stacks-node"]),
@@ -318,7 +307,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
     }
 
     // Wiping state under running containers corrupts them; refuse first.
-    if let Some(running) = crate::docker::running_services(data_dir) {
+    if let Some(running) = crate::utils::docker::running_services(data_dir) {
         let blocking: Vec<&String> = running
             .iter()
             .filter(|r| service.is_none() || affected.contains(&r.as_str()))
@@ -371,4 +360,107 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
     std::fs::remove_dir_all(&dir).with_context(|| format!("failed to delete {}", dir.display()))?;
     println!("Deleted {}", dir.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deployment(toml_str: &str) -> Deployment {
+        crate::config::test_deployment(toml_str)
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("stacksup-cs-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Fabricate the two node DBs with known heights.
+    fn write_node_dbs(data_dir: &std::path::Path, sortition_btc: u64, headers_stx: u64) {
+        let node = data_dir.join("chainstate/stacks-node/krypton");
+        std::fs::create_dir_all(node.join("burnchain/sortition")).unwrap();
+        std::fs::create_dir_all(node.join("chainstate/vm")).unwrap();
+        let sort =
+            rusqlite::Connection::open(node.join("burnchain/sortition/marf.sqlite")).unwrap();
+        sort.execute_batch(
+            "CREATE TABLE snapshots(block_height INTEGER, canonical_stacks_tip_height INTEGER, pox_valid INTEGER);",
+        )
+        .unwrap();
+        sort.execute(
+            "INSERT INTO snapshots VALUES (?1, 0, 1)",
+            rusqlite::params![sortition_btc],
+        )
+        .unwrap();
+        let headers = rusqlite::Connection::open(node.join("chainstate/vm/index.sqlite")).unwrap();
+        headers
+            .execute_batch(
+                "CREATE TABLE nakamoto_block_headers(block_height INTEGER);\n\
+                 CREATE TABLE block_headers(block_height INTEGER);",
+            )
+            .unwrap();
+        headers
+            .execute(
+                "INSERT INTO nakamoto_block_headers VALUES (?1)",
+                rusqlite::params![headers_stx],
+            )
+            .unwrap();
+        headers
+            .execute("INSERT INTO block_headers VALUES (726)", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn node_tip_reads_headers_db_not_sortition_snapshot() {
+        let dir = temp_dir("tip");
+        write_node_dbs(&dir, 3026, 10602);
+        let s = deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let tip = node_tip(&s, &dir);
+        assert_eq!(tip.bitcoin, Some(3026));
+        // stacks height must come from the headers db (the sortition snapshot
+        // said 0 and lags per burn block post-Nakamoto)
+        assert_eq!(tip.stacks, Some(10602));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn node_tip_without_dbs_reports_note() {
+        let dir = temp_dir("empty");
+        let s = deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let tip = node_tip(&s, &dir);
+        assert_eq!(tip.stacks, None);
+        assert!(tip.note.unwrap().contains("has the node run yet"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_rejects_services_without_state() {
+        let dir = temp_dir("wipe-unknown");
+        let err = wipe(&dir, Some("stacks-api"), true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no on-disk chainstate"));
+        assert!(err.contains("postgres")); // the valid list names postgres instead
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_single_service_leaves_the_rest() {
+        let dir = temp_dir("wipe-single");
+        std::fs::create_dir_all(dir.join("chainstate/postgres")).unwrap();
+        std::fs::create_dir_all(dir.join("chainstate/bitcoind")).unwrap();
+        wipe(&dir, Some("postgres"), true).unwrap();
+        assert!(!dir.join("chainstate/postgres").exists());
+        assert!(dir.join("chainstate/bitcoind").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_missing_dir_is_a_noop() {
+        let dir = temp_dir("wipe-noop");
+        assert!(wipe(&dir, None, true).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

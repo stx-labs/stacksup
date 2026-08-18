@@ -1,11 +1,10 @@
-//! `stacksup logs export` — package logs (and diagnostic context) into a
-//! shareable file for troubleshooting.
+//! `stacksup logs export` packages logs (and diagnostic context) into a shareable file for
+//! troubleshooting.
 //!
-//! Default output is a support bundle: per-service logs plus versions, ps,
-//! images, redacted configs, and the chainstate/config check reports. All
-//! text passes through redaction (known secret values + password/token/key
-//! lines) so the artifact is safe to hand to someone else — though the final
-//! message still tells the user to review it.
+//! Default output is a support bundle: per-service logs plus versions, ps, images, redacted
+//! configs, and the chainstate/config check reports. All text passes through redaction (known
+//! secret values + password/token/key lines) so the artifact is safe to hand to someone else,
+//! though the final message still tells the user to review it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,8 +13,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
-use crate::config::{ServiceMode, Stack};
-use crate::services::roster;
+use crate::config::{Deployment, ServiceMode};
+use crate::utils::services::roster;
 
 pub struct Opts {
     pub service: Option<String>,
@@ -24,15 +23,15 @@ pub struct Opts {
     pub out: Option<PathBuf>,
 }
 
-pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Result<()> {
-    crate::docker::preflight(data_dir)?;
+pub fn run(deployment: &Deployment, config_path: &Path, data_dir: &Path, opts: Opts) -> Result<()> {
+    crate::utils::docker::preflight(data_dir)?;
 
     let services: Vec<String> = match &opts.service {
         Some(name) => {
-            crate::docker::ensure_enabled(stack, name)?;
+            crate::utils::docker::ensure_enabled(deployment, name)?;
             vec![name.clone()]
         }
-        None => roster(stack)
+        None => roster(deployment)
             .into_iter()
             .filter(|(_, m)| *m == ServiceMode::Enabled)
             .map(|(n, _)| n.to_string())
@@ -42,10 +41,10 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         bail!("no enabled services in stacks.toml — nothing to export");
     }
 
-    // Containers that still exist (logs live inside them). `stacksup stop`
-    // keeps them; `stacksup stop --destroy` removes them along with their logs.
+    // Containers that still exist (logs live inside them). `stacksup stop` keeps them; `stacksup
+    // stop --destroy` removes them along with their logs.
     let existing: Vec<String> =
-        crate::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
+        crate::utils::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
             .lines()
             .map(str::to_owned)
             .collect();
@@ -57,9 +56,9 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         );
     }
 
-    let secrets = secret_values(stack);
+    let secrets = secret_values(deployment);
     let ts = timestamp();
-    let network = stack.network;
+    let network = deployment.network.as_str();
 
     // Single service + --logs-only: a plain .log file, no archive.
     if opts.logs_only && services.len() == 1 {
@@ -98,22 +97,23 @@ pub fn run(stack: &Stack, config_path: &Path, data_dir: &Path, opts: Opts) -> Re
         let meta = format!(
             "stacks-tool version: {}\nnetwork: {network}\ncreated: {ts}\ndocker: {}\ncompose: {}\nservices: {}\n",
             env!("CARGO_PKG_VERSION"),
-            crate::docker::daemon_version().unwrap_or_else(|e| format!("unavailable ({e})")),
-            crate::docker::compose_version().unwrap_or_else(|e| format!("unavailable ({e})")),
+            crate::utils::docker::daemon_version().unwrap_or_else(|e| format!("unavailable ({e})")),
+            crate::utils::docker::compose_version()
+                .unwrap_or_else(|e| format!("unavailable ({e})")),
             services.join(", "),
         );
         fs::write(tmp.join("meta.txt"), meta)?;
         fs::write(
             tmp.join("ps.txt"),
             redact(
-                &crate::docker::compose_capture(data_dir, &["ps", "-a"])?,
+                &crate::utils::docker::compose_capture(data_dir, &["ps", "-a"])?,
                 &secrets,
             ),
         )?;
         fs::write(
             tmp.join("images.txt"),
             redact(
-                &crate::docker::compose_capture(data_dir, &["images"])?,
+                &crate::utils::docker::compose_capture(data_dir, &["images"])?,
                 &secrets,
             ),
         )?;
@@ -172,7 +172,7 @@ fn print_review_note() {
 }
 
 fn capture_logs(data_dir: &Path, service: &str, since: &str) -> String {
-    crate::docker::compose_capture(
+    crate::utils::docker::compose_capture(
         data_dir,
         &[
             "logs",
@@ -186,8 +186,8 @@ fn capture_logs(data_dir: &Path, service: &str, since: &str) -> String {
     .unwrap_or_else(|e| format!("failed to collect logs: {e}\n"))
 }
 
-/// Run one of our own subcommands and capture its report (colored degrades to
-/// plain text automatically because the output is not a terminal).
+/// Run one of our own subcommands and capture its report (colored degrades to plain text
+/// automatically because the output is not a terminal).
 fn self_report(config_path: &Path, data_dir: &Path, args: &[&str]) -> String {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -215,23 +215,36 @@ fn self_report(config_path: &Path, data_dir: &Path, args: &[&str]) -> String {
 
 /// Secret *values* known from the config, scrubbed wherever they appear
 /// (configs and logs alike — the node echoes config at startup).
-fn secret_values(stack: &Stack) -> Vec<String> {
+fn secret_values(deployment: &Deployment) -> Vec<String> {
+    // Post-merge, every secret lives on the deployment itself.
     let mut v: Vec<String> = [
-        stack.postgres.password.clone(),
-        stack.bitcoind.rpc_password.clone(),
-        stack.stacks_node.auth_token.clone(),
+        deployment.postgres.password.clone(),
+        deployment.bitcoind.rpc_user.clone(),
+        deployment.bitcoind.rpc_password.clone(),
+        deployment.stacks_node.auth_token.clone(),
     ]
     .into_iter()
     .flatten()
-    .filter(|s| s.len() >= 4)
     .collect();
-    v.push("stacks-tool-dev-auth-token".into());
+    if let (Some(user), Some(password)) = (
+        &deployment.bitcoind.rpc_user,
+        &deployment.bitcoind.rpc_password,
+    ) {
+        let rpcauth = crate::utils::secrets::bitcoind_rpcauth(user, password);
+        // The compose file carries the `$$`-escaped form (compose
+        // interpolation); scrub both spellings.
+        v.push(rpcauth.replace('$', "$$"));
+        v.push(rpcauth);
+    }
+    // Longest first: the rpcauth line embeds the username, so scrubbing the
+    // shorter username first would split it and leave the verifier exposed.
+    v.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    v.retain(|s| s.len() >= 4);
     v
 }
 
-/// Two-pass scrub: exact secret values anywhere, then any line whose key
-/// looks credential-ish (covers defaults we didn't collect and container
-/// startup echoes).
+/// Two-pass scrub: exact secret values anywhere, then any line whose key looks credential-ish
+/// (covers defaults we didn't collect and container startup echoes).
 fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
     for secret in secrets {
@@ -307,6 +320,49 @@ mod tests {
     fn redacts_secret_values_everywhere() {
         let out = redact("connecting with s3cretpw now", &["s3cretpw".to_string()]);
         assert_eq!(out, "connecting with <redacted> now\n");
+    }
+
+    #[test]
+    fn redacts_both_rpcauth_spellings() {
+        // Bundles include node config (plain `$`) AND the compose file
+        // (compose-escaped `$$`) — the verifier must vanish from both.
+        let mut d = crate::config::test_deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"",
+        );
+        d.bitcoind.rpc_user = Some("rafa1234".into());
+        d.bitcoind.rpc_password = Some("btc-pass-1234".into());
+        let secrets = secret_values(&d);
+        let rpcauth = crate::utils::secrets::bitcoind_rpcauth("rafa1234", "btc-pass-1234");
+        let text = format!(
+            "config: -rpcauth={rpcauth}\ncompose: -rpcauth={}\n",
+            rpcauth.replace('$', "$$")
+        );
+        let out = redact(&text, &secrets);
+        let digest = rpcauth.split('$').next_back().unwrap();
+        assert!(!out.contains(digest), "digest survived: {out}");
+        assert!(!out.contains("rafa1234"), "username survived: {out}");
+    }
+
+    #[test]
+    fn copies_tree_with_redaction() {
+        let src = std::env::temp_dir().join(format!("stacksup-export-src-{}", std::process::id()));
+        let dst = std::env::temp_dir().join(format!("stacksup-export-dst-{}", std::process::id()));
+        for d in [&src, &dst] {
+            let _ = fs::remove_dir_all(d);
+        }
+        fs::create_dir_all(src.join("nested")).unwrap();
+        fs::write(
+            src.join("nested/app.env"),
+            "PG_PASSWORD=hunter2\nPG_HOST=postgres\n",
+        )
+        .unwrap();
+        copy_redacted_tree(&src, &dst, &[]).unwrap();
+        let copied = fs::read_to_string(dst.join("nested/app.env")).unwrap();
+        assert!(copied.contains("PG_PASSWORD= <redacted>"));
+        assert!(copied.contains("PG_HOST=postgres"));
+        for d in [&src, &dst] {
+            let _ = fs::remove_dir_all(d);
+        }
     }
 
     #[test]

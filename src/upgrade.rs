@@ -1,65 +1,97 @@
-//! `stacksup upgrade` — suggestions only, never applies anything.
+//! `stacksup upgrade`, suggestions only, never applies anything.
 //!
-//! Compares each enabled service's configured version against what the image
-//! registries offer and prints per-service guidance. Domain rules baked in:
-//! same-major bumps are routine (edit stacks.toml, pull, restart); a MAJOR
-//! stacks-api bump is DB-breaking and requires wiping the API's postgres data
-//! and re-seeding via `chainstate download`; a major postgres bump requires a
+//! Compares each enabled service's configured version against what the image registries offer and
+//! prints per-service guidance. Domain rules baked in: same-major bumps are routine (edit
+//! stacks.toml, pull, restart); a MAJOR stacks-api bump is DB-breaking and requires wiping the
+//! API's postgres data and re-seeding via `chainstate download`; a major postgres bump requires a
 //! data migration; node and signer versions should move together.
 
 use anyhow::{Context, Result};
 use colored::Colorize;
 
-use crate::config::{ServiceMode, Stack};
-use crate::versions::*;
+use crate::config::{Deployment, ServiceMode};
+use crate::utils::versions::*;
 
 struct Row {
     name: &'static str,
     current: Option<Vec<u64>>,
     current_note: &'static str,
-    /// Tag pins only a major (e.g. postgres `17`): minors float with pulls,
-    /// so only a new major is a real suggestion.
+    /// The tag is pinned inside the `image` override, upgrade guidance must say "update the image
+    /// tag", not "set version" (validation rejects `version` alongside a tagged `image`).
+    tag_from_image: bool,
+    /// Tag pins only a major (e.g. postgres `17`): minors float with pulls, so only a new major is
+    /// a real suggestion.
     major_pin: bool,
     same_major: Option<Vec<u64>>,
     next_major: Option<Vec<u64>>,
     error: Option<String>,
 }
 
-pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
-    let targets: Vec<(&'static str, ServiceMode, String)> = [
+pub fn run(deployment: &Deployment, service: Option<&str>) -> Result<()> {
+    let targets: Vec<(&'static str, ServiceMode, String, bool)> = [
         (
             "bitcoind",
-            stack.bitcoind.mode,
-            crate::services::bitcoind_image(stack),
+            deployment.bitcoind.mode,
+            crate::utils::services::bitcoind_image(deployment),
+            deployment
+                .bitcoind
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-node",
-            stack.stacks_node.mode,
-            crate::services::stacks_node_image(stack),
+            deployment.stacks_node.mode,
+            crate::utils::services::stacks_node_image(deployment),
+            deployment
+                .stacks_node
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-signer",
-            stack.stacks_signer.mode,
-            crate::services::stacks_signer_image(stack),
+            deployment.stacks_signer.mode,
+            crate::utils::services::stacks_signer_image(deployment),
+            deployment
+                .stacks_signer
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-api",
-            stack.stacks_api.mode,
-            crate::services::stacks_api_image(stack),
+            deployment.stacks_api.mode,
+            crate::utils::services::stacks_api_image(deployment),
+            deployment
+                .stacks_api
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "stacks-mesh-api",
-            stack.stacks_mesh_api.mode,
-            crate::services::stacks_mesh_api_image(stack),
+            deployment.stacks_mesh_api.mode,
+            crate::utils::services::stacks_mesh_api_image(deployment),
+            deployment
+                .stacks_mesh_api
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
         (
             "postgres",
-            stack.postgres.mode,
-            crate::services::postgres_image(stack),
+            deployment.postgres.mode,
+            crate::utils::services::postgres_image(deployment),
+            deployment
+                .postgres
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
         ),
     ]
     .into_iter()
-    .filter(|(n, m, _)| *m == ServiceMode::Enabled && service.is_none_or(|s| s == *n))
+    .filter(|(n, m, _, _)| *m == ServiceMode::Enabled && service.is_none_or(|s| s == *n))
     .collect();
 
     if targets.is_empty() {
@@ -72,8 +104,8 @@ pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
     println!("Checking registries for newer image versions...\n");
 
     let mut rows = Vec::new();
-    for (name, _, image) in &targets {
-        rows.push(check_service(name, image));
+    for (name, _, image, tag_from_image) in &targets {
+        rows.push(check_service(name, image, *tag_from_image));
     }
 
     // Table
@@ -115,18 +147,17 @@ pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
         rows.iter()
             .find(|r| r.name == "stacks-signer")
             .and_then(|r| r.current.clone()),
-    ) {
-        if node != signer {
-            println!(
+    ) && node != signer
+    {
+        println!(
                 "\n{}",
                 format!(
-                    "⚠ stacks-node ({}) and stacks-signer ({}) versions differ — they should be upgraded together",
+                    "⚠ stacks-node ({}) and stacks-signer ({}) versions differ. They should be upgraded together",
                     version_string(&node),
                     version_string(&signer)
                 )
                 .yellow()
             );
-        }
     }
 
     if upgrades == 0 {
@@ -134,7 +165,7 @@ pub fn run(stack: &Stack, service: Option<&str>) -> Result<()> {
     } else {
         println!(
             "\n{}",
-            format!("{upgrades} upgrade(s) available. This command only suggests — apply by editing stacks.toml.")
+            format!("{upgrades} upgrade(s) available. This command only suggests. Apply by editing stacks.toml.")
                 .yellow()
         );
     }
@@ -152,7 +183,7 @@ fn verdict(row: &Row, upgrades: &mut u32) -> (String, String) {
                 .or(row.next_major.as_ref())
                 .map(|v| version_string(v))
                 .unwrap_or_else(|| "-".into()),
-            "⚠ current version unknown — pin a version or `stacksup pull`"
+            "⚠ current version unknown. Pin a version or `stacksup pull`"
                 .yellow()
                 .to_string(),
         );
@@ -211,27 +242,37 @@ fn guidance(row: &Row) -> Option<String> {
     if minor.is_none() && major.is_none() {
         return None;
     }
+    // Where the new tag goes: `version`, unless the tag is pinned inside the
+    // `image` override (validation rejects `version` in that case).
+    let set_tag = |name: &str, ver: &str| {
+        if row.tag_from_image {
+            format!("update the tag in [{name}] `image` to \"{ver}\"")
+        } else {
+            format!("set [{name}] version = \"{ver}\"")
+        }
+    };
     let mut out = String::new();
     match row.name {
         "stacks-api" => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  stacks-api {}: same-major — DB-compatible. Set [stacks-api] version = \"{}\", \
+                    "  stacks-api {}: same-major — DB-compatible. {}, \
                      then `stacksup pull && stacksup stop && stacksup start`.\n",
                     version_string(m),
-                    version_string(m)
+                    set_tag("stacks-api", &version_string(m)),
                 ));
             }
             if let Some(mj) = major {
                 out.push_str(
                     &format!(
-                        "  stacks-api {mj}: MAJOR — DB-BREAKING. The new API cannot migrate the old database:\n\
+                        "  stacks-api {mj}: MAJOR, DB-BREAKING. The new API cannot migrate the old database:\n\
                              1. `stacksup stop`\n\
                              2. `stacksup chainstate wipe postgres` (API data only)\n\
-                             3. set [stacks-api] version = \"{mj}\" and `stacksup pull`\n\
+                             3. {set_step} and `stacksup pull`\n\
                              4. `stacksup chainstate download --service api` (archive matching the new major)\n\
                              5. `stacksup start`",
-                        mj = version_string(mj)
+                        mj = version_string(mj),
+                        set_step = set_tag("stacks-api", &version_string(mj)),
                     )
                     .red()
                     .to_string(),
@@ -241,14 +282,14 @@ fn guidance(row: &Row) -> Option<String> {
         "postgres" => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  postgres {}: patch/minor — safe. Set [postgres] version = \"{}\", then pull + restart.\n",
+                    "  postgres {}: patch/minor. Safe. {}, then pull + restart.\n",
                     version_string(m),
-                    version_string(m)
+                    set_tag("postgres", &version_string(m)),
                 ));
             }
             if let Some(mj) = major {
                 out.push_str(&format!(
-                    "  postgres {}: MAJOR — the data directory does not migrate itself. Either stay on \
+                    "  postgres {}: MAJOR. The data directory does not migrate itself. Either stay on \
                      the current major, or wipe + re-seed the API database after switching.",
                     version_string(mj)
                 ));
@@ -257,23 +298,23 @@ fn guidance(row: &Row) -> Option<String> {
         "stacks-node" | "stacks-signer" => {
             let v = minor.or(major)?;
             out.push_str(&format!(
-                "  {}: set version = \"{}\" (upgrade stacks-node and stacks-signer together), \
+                "  {}: {} (upgrade stacks-node and stacks-signer together), \
                  then `stacksup pull && stacksup stop && stacksup start`. Chainstate migrates forward automatically.",
                 row.name,
-                version_string(v)
+                set_tag(row.name, &version_string(v)),
             ));
         }
         _ => {
             if let Some(m) = minor {
                 out.push_str(&format!(
-                    "  {}: set version = \"{}\", then `stacksup pull && stacksup stop && stacksup start`.\n",
+                    "  {}: {}, then `stacksup pull && stacksup stop && stacksup start`.\n",
                     row.name,
-                    version_string(m)
+                    set_tag(row.name, &version_string(m)),
                 ));
             }
             if let Some(mj) = major {
                 out.push_str(&format!(
-                    "  {}: major {} also available — review its release notes before crossing majors.",
+                    "  {}: major {} also available. Review its release notes before crossing majors.",
                     row.name,
                     version_string(mj)
                 ));
@@ -283,12 +324,12 @@ fn guidance(row: &Row) -> Option<String> {
     Some(out.trim_end().to_string())
 }
 
-fn check_service(name: &'static str, image: &str) -> Row {
+fn check_service(name: &'static str, image: &str, tag_from_image: bool) -> Row {
     let repo = image.rsplit_once(':').map(|(r, _)| r).unwrap_or(image);
     let tag = image_tag(image);
 
-    // Current: full pin from the tag; a bare-major tag (`17`) is a deliberate
-    // floating pin within that major; otherwise the pulled image's label.
+    // Current: full pin from the tag; a bare-major tag (`17`) is a deliberate floating pin within
+    // that major; otherwise the pulled image's label.
     let (current, current_note, major_pin) = match parse_version(&tag) {
         Some(v) if v.len() >= 2 => (Some(v), "", false),
         Some(v) => (Some(v), ".x", true),
@@ -302,6 +343,7 @@ fn check_service(name: &'static str, image: &str) -> Row {
         name,
         current,
         current_note,
+        tag_from_image,
         major_pin,
         same_major: None,
         next_major: None,
@@ -337,24 +379,34 @@ fn check_service(name: &'static str, image: &str) -> Row {
     row
 }
 
-/// Concrete version tags (>= 2 numeric components) available in the image's
-/// registry. Anonymous APIs: Docker Hub's tag listing, GHCR's token + v2 flow.
+/// Concrete version tags (>= 2 numeric components) available in the image's registry. Anonymous
+/// APIs: Docker Hub's tag listing, GHCR's token + v2 flow.
 fn registry_versions(repo: &str) -> Result<Vec<Vec<u64>>> {
     let tags = if let Some(path) = repo.strip_prefix("ghcr.io/") {
         ghcr_tags(path)?
     } else {
-        let path = if repo.contains('/') {
-            repo.to_string()
-        } else {
-            format!("library/{repo}")
-        };
-        dockerhub_tags(&path)?
+        dockerhub_tags(&dockerhub_path(repo))?
     };
     Ok(tags
         .iter()
         .filter_map(|t| parse_version(t))
         .filter(|v| v.len() >= 2)
         .collect())
+}
+
+/// Docker Hub API path for a repository: strips the canonical Hub host prefixes (`docker.io/`,
+/// `index.docker.io/`, `registry-1.docker.io/`) and qualifies official images under `library/`.
+fn dockerhub_path(repo: &str) -> String {
+    let repo = repo
+        .strip_prefix("docker.io/")
+        .or_else(|| repo.strip_prefix("index.docker.io/"))
+        .or_else(|| repo.strip_prefix("registry-1.docker.io/"))
+        .unwrap_or(repo);
+    if repo.contains('/') {
+        repo.to_string()
+    } else {
+        format!("library/{repo}")
+    }
 }
 
 fn dockerhub_tags(path: &str) -> Result<Vec<String>> {
@@ -402,4 +454,113 @@ fn ghcr_tags(path: &str) -> Result<Vec<String>> {
                 .collect()
         })
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(
+        current: Option<Vec<u64>>,
+        major_pin: bool,
+        same: Option<Vec<u64>>,
+        next: Option<Vec<u64>>,
+    ) -> Row {
+        Row {
+            name: "stacks-api",
+            current,
+            current_note: "",
+            tag_from_image: false,
+            major_pin,
+            same_major: same,
+            next_major: next,
+            error: None,
+        }
+    }
+
+    fn verdict_text(r: &Row) -> (String, String, u32) {
+        let mut upgrades = 0;
+        let (available, verdict) = verdict(r, &mut upgrades);
+        (available, verdict, upgrades)
+    }
+
+    #[test]
+    fn up_to_date_counts_no_upgrade() {
+        let (_, v, n) = verdict_text(&row(Some(vec![9, 0, 2]), false, Some(vec![9, 0, 2]), None));
+        assert!(v.contains("up to date"));
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn minor_and_major_both_reported() {
+        let (avail, v, n) = verdict_text(&row(
+            Some(vec![8, 5, 0]),
+            false,
+            Some(vec![8, 15, 4]),
+            Some(vec![9, 0, 2]),
+        ));
+        assert!(avail.contains("8.15.4") && avail.contains("9.0.2"));
+        assert!(v.contains("upgrade + new MAJOR"));
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn major_pin_only_alerts_on_new_major() {
+        // tracking `17`: newer 17.x is NOT an upgrade suggestion
+        let (_, v, n) = verdict_text(&row(Some(vec![17]), true, Some(vec![17, 9]), None));
+        assert!(v.contains("tracking latest"));
+        assert_eq!(n, 0);
+        let (_, v, n) = verdict_text(&row(
+            Some(vec![17]),
+            true,
+            Some(vec![17, 9]),
+            Some(vec![18, 4]),
+        ));
+        assert!(v.contains("new MAJOR"));
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn api_major_guidance_is_db_breaking_with_reseed_steps() {
+        let text = guidance(&row(Some(vec![8, 5, 0]), false, None, Some(vec![9, 0, 2]))).unwrap();
+        assert!(text.contains("DB-BREAKING"));
+        assert!(text.contains("stacksup chainstate wipe postgres"));
+        assert!(text.contains("chainstate download --service api"));
+    }
+
+    #[test]
+    fn guidance_targets_image_when_tag_pinned_there() {
+        let mut r = row(Some(vec![8, 5, 0]), false, Some(vec![8, 15, 4]), None);
+        r.tag_from_image = true;
+        let text = guidance(&r).unwrap();
+        assert!(text.contains("update the tag in [stacks-api] `image`"));
+        assert!(!text.contains("version = "));
+        // and the DB-breaking major path too
+        let mut r = row(Some(vec![8, 5, 0]), false, None, Some(vec![9, 0, 2]));
+        r.tag_from_image = true;
+        let text = guidance(&r).unwrap();
+        assert!(text.contains("update the tag in [stacks-api] `image` to \"9.0.2\""));
+    }
+
+    #[test]
+    fn dockerhub_path_normalizes_hub_hosts() {
+        assert_eq!(dockerhub_path("docker.io/myorg/api"), "myorg/api");
+        assert_eq!(dockerhub_path("index.docker.io/myorg/api"), "myorg/api");
+        assert_eq!(dockerhub_path("docker.io/postgres"), "library/postgres");
+        assert_eq!(dockerhub_path("postgres"), "library/postgres");
+        assert_eq!(dockerhub_path("myorg/api"), "myorg/api");
+    }
+
+    #[test]
+    fn postgres_major_guidance_warns_about_migration() {
+        let mut r = row(Some(vec![17]), true, None, Some(vec![18, 4]));
+        r.name = "postgres";
+        let text = guidance(&r).unwrap();
+        assert!(text.contains("does not migrate itself"));
+    }
+
+    #[test]
+    fn no_guidance_when_current() {
+        assert!(guidance(&row(Some(vec![9, 0, 2]), false, Some(vec![9, 0, 2]), None)).is_none());
+    }
 }
