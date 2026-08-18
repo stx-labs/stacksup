@@ -8,3 +8,4 @@ stacks.toml
 /.export-tmp
 .DS_Store
 /secrets.toml
+/dist
