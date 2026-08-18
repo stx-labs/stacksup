@@ -21,6 +21,22 @@ stacksup chainstate status # compare every service's chain tip (stacks + bitcoin
 stacksup chainstate download # seed chainstate from the Hiro Archive (resumable, verified)
 ```
 
+## Installing
+
+Grab a binary from [GitHub Releases](https://github.com/stx-labs/stacksup/releases)
+(macOS arm64/x86_64, Linux arm64/x86_64 — the Linux builds are fully static)
+and put `stacksup` on your PATH. Or run it as a container: the image drives
+the **host's** docker daemon, and the compose file it renders uses bind
+mounts the daemon resolves as host paths — so mount your deployment
+directory at the *same path* inside the container:
+
+```bash
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":"$PWD" -w "$PWD" \
+  ghcr.io/stx-labs/stacksup start
+```
+
 ## Networks
 
 Standard network definitions (burnchain endpoint, chain id, epochs, seeded
@@ -151,5 +167,5 @@ the service's configured `version` in stacks.toml.
 - [ ] `upgrade`: image update with pre-upgrade pg backup, ordered restart, post-check
 - [ ] `snapshot`: stop-consistent chainstate + pg_dump pairs with version metadata
 - [ ] Profiles: `exchange` (readonly API replicas, pruned mode), richer `signer` (monitor-signers wiring)
-- [ ] Release: `dist init` for GitHub Releases + Homebrew tap (`brew install ...`)
+- [x] Release: binaries on GitHub Releases + multi-arch image on GHCR (`.github/workflows/release.yml`); Homebrew tap still to come
 - [ ] Pin real image tags (stacks-core, signer, API, mesh API)
