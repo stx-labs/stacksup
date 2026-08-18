@@ -39,16 +39,14 @@ pub enum NodeRole {
 /// The deployment configuration. This is the root of the configuration and contains all the
 /// services and their configurations.
 pub struct Deployment {
-    /// Deployment name: becomes the compose project name and the container
-    /// name prefix, so several deployments can share a machine. Lowercase
-    /// alphanumerics and dashes. The default keeps the historical single-
-    /// deployment naming (project `stacks`, containers `stacks-node`, ...).
+    /// Deployment name: becomes the compose project name and the container name prefix, so several
+    /// deployments can share a machine. Lowercase alphanumerics and dashes. The default keeps the
+    /// historical single- deployment naming (project `stacks`, containers `stacks-node`, ...).
     #[serde(default = "default_deployment_name")]
     pub name: String,
-    /// Added to every published HOST port (container-internal ports never
-    /// change), so a second deployment can run beside the first:
-    /// `port_offset = 100` publishes the node RPC on 20543, the API on 4099,
-    /// postgres on 5532, and so on.
+    /// Added to every published HOST port (container-internal ports never change), so a second
+    /// deployment can run beside the first: `port_offset = 100` publishes the node RPC on 20543,
+    /// the API on 4099, postgres on 5532, and so on.
     #[serde(default)]
     pub port_offset: u16,
     /// Network name: a built-in definition (mainnet, testnet) or a custom definition file resolved
@@ -77,7 +75,7 @@ pub struct Bitcoind {
     #[serde(default)]
     pub mode: ServiceMode,
     /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
-    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1`, mutually exclusive
     /// with `version`).
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
@@ -97,7 +95,7 @@ pub struct StacksNode {
     #[serde(default)]
     pub mode: ServiceMode,
     /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
-    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1`, mutually exclusive
     /// with `version`).
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
@@ -107,9 +105,8 @@ pub struct StacksNode {
     /// Required when mode = "external"
     pub rpc_host: Option<String>,
     pub rpc_port: Option<u16>,
-    /// The node's `connection_options.auth_token`. SECRET: set in
-    /// secrets.toml ([stacks-node] auth_token), never here. For an external
-    /// node it must match what your node runs with.
+    /// The node's `connection_options.auth_token`. SECRET: set in secrets.toml ([stacks-node]
+    /// auth_token), never here. For an external node it must match what your node runs with.
     pub auth_token: Option<String>,
 }
 
@@ -118,9 +115,9 @@ pub struct StacksNode {
 pub struct StacksSigner {
     #[serde(default)]
     pub mode: ServiceMode,
-    /// Docker image override: a repository (`myorg/stacks-node`) that keeps
-    /// using `version`/the default tag, or a full ref with its own tag
-    /// (`myorg/stacks-node:4.0.1` — mutually exclusive with `version`).
+    /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1`, mutually exclusive
+    /// with `version`).
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
@@ -132,7 +129,7 @@ pub struct StacksApi {
     #[serde(default)]
     pub mode: ServiceMode,
     /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
-    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1`, mutually exclusive
     /// with `version`).
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
@@ -151,7 +148,7 @@ pub struct StacksMeshApi {
     #[serde(default)]
     pub mode: ServiceMode,
     /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
-    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1`, mutually exclusive
     /// with `version`).
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
@@ -166,7 +163,7 @@ pub struct Postgres {
     #[serde(default)]
     pub mode: ServiceMode,
     /// Docker image override: a repository (`myorg/stacks-node`) that keeps using `version`/the
-    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1` — mutually exclusive
+    /// default tag, or a full ref with its own tag (`myorg/stacks-node:4.0.1`, mutually exclusive
     /// with `version`).
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
@@ -179,8 +176,8 @@ pub struct Postgres {
     pub password: Option<String>,
 }
 
-/// The default deployment name: compose project `stacks` and the historical
-/// container names. Render-time naming branches on this same constant.
+/// The default deployment name: compose project `stacks` and the historical container names.
+/// Render-time naming branches on this same constant.
 pub const DEFAULT_PROJECT: &str = "stacks";
 
 fn default_deployment_name() -> String {
@@ -188,19 +185,19 @@ fn default_deployment_name() -> String {
 }
 
 impl Deployment {
-    /// The docker compose project (embedded in the rendered compose file as
-    /// its top-level `name:`), and the container-name prefix.
+    /// The docker compose project (embedded in the rendered compose file as its top-level `name:`),
+    /// and the container-name prefix.
     pub fn project(&self) -> &str {
         &self.name
     }
 
-    /// A service's host-published port: the base shifted by `port_offset`.
-    /// Validation bounds the offset, but guard the addition anyway so an
-    /// unvalidated path can never wrap around the u16 range silently.
+    /// A service's host-published port: the base shifted by `port_offset`. Validation bounds the
+    /// offset, but guard the addition anyway so an unvalidated path can never wrap around the u16
+    /// range silently.
     pub fn published(&self, base: u16) -> u16 {
         base.checked_add(self.port_offset).unwrap_or_else(|| {
             panic!(
-                "port {base} + port_offset {} exceeds 65535 — lower port_offset in stacks.toml",
+                "port {base} + port_offset {} exceeds 65535. Lower port_offset in stacks.toml",
                 self.port_offset
             )
         })
@@ -232,9 +229,8 @@ impl Deployment {
         self.stacks_node.auth_token = overlay.stacks_node.auth_token;
     }
 
-    /// Secrets that MUST be present given the enabled services. The tool
-    /// never writes secrets.toml itself — missing values are the user's to
-    /// add, so the error carries a paste-ready snippet.
+    /// Secrets that MUST be present given the enabled services. The tool never writes secrets.toml
+    /// itself. Missing values are the user's to add, so the error carries a paste-ready snippet.
     fn check_required_secrets(&self, config_dir: &Path) -> Result<()> {
         let mut missing: Vec<(&str, &str)> = Vec::new();
         if self.postgres.mode != ServiceMode::Disabled && self.postgres.password.is_none() {
@@ -263,8 +259,8 @@ impl Deployment {
         Ok(())
     }
 
-    /// Cross-service validation: the rules that make invalid stacks fail at
-    /// `up` time instead of becoming runtime mysteries.
+    /// Cross-service validation: the rules that make invalid stacks fail at `up` time instead of
+    /// becoming runtime mysteries.
     pub fn validate(&self) -> (Vec<String>, Vec<String>) {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
@@ -287,16 +283,16 @@ impl Deployment {
                 self.name
             ));
         }
-        // Highest published base port is the node p2p (20444); keep the
-        // shifted ports inside the u16 range with room to spare.
+        // Highest published base port is the node p2p (20444); keep the shifted ports inside the
+        // u16 range with room to spare.
         if self.port_offset > 40000 {
             errors.push(format!(
                 "port_offset {} is too large (max 40000)",
                 self.port_offset
             ));
         }
-        // A node needs a burnchain source: its own/external bitcoind, or the
-        // network's hosted default endpoint.
+        // A node needs a burnchain source: its own/external bitcoind, or the network's hosted
+        // default endpoint.
         if self.stacks_node.mode == ServiceMode::Enabled
             && self.bitcoind.mode == ServiceMode::Disabled
             && self.net.bitcoind.default_host.is_none()
@@ -315,8 +311,8 @@ impl Deployment {
             ));
         }
 
-        // `image` with an explicit tag and `version` are two sources of truth
-        // for the same tag — reject the ambiguity.
+        // `image` with an explicit tag and `version` are two sources of truth for the same tag,
+        // reject the ambiguity.
         for (name, image, version) in [
             ("bitcoind", &self.bitcoind.image, &self.bitcoind.version),
             (
@@ -345,7 +341,7 @@ impl Deployment {
                 && crate::utils::versions::has_explicit_tag(image)
             {
                 errors.push(format!(
-                    "[{name}] `image` already pins a tag (`{image}`) — remove `version` or drop the tag from `image`"
+                    "[{name}] `image` already pins a tag (`{image}`). Remove `version` or drop the tag from `image`"
                 ));
             }
         }
@@ -410,15 +406,15 @@ impl Deployment {
             }
         }
 
-        // Reversed (push) edges: the node's config must name its observers. When
-        // the node is external we can't write that config, only emit it.
+        // Reversed (push) edges: the node's config must name its observers. When the node is
+        // external we can't write that config, only emit it.
         if self.stacks_node.mode == ServiceMode::External
             && self.stacks_api.mode == ServiceMode::Enabled
         {
             warnings.push(
                 "stacks-api is managed but the node is external: add the [[events_observer]] block \
                  from `rendered/apply-to-your-node.toml` to your node config, then verify with `stacksup config check`. \
-                 Note: the API's event port (3700) is not published on this host — an off-host node \
+                 Note: the API's event port (3700) is not published on this host, an off-host node \
                  cannot push to it; run the node on this machine or expose the port yourself (compose override)"
                     .into(),
             );
@@ -446,15 +442,15 @@ pub fn load(path: &Path) -> Result<Deployment> {
     let config_dir = path.parent().unwrap_or(Path::new("."));
     deployment.net = network::load(&deployment.network, config_dir)?;
 
-    // Secrets never belong in the committable config; they come from the
-    // secrets.toml overlay beside it.
+    // Secrets never belong in the committable config; they come from the secrets.toml overlay
+    // beside it.
     let leaked = deployment.config_secret_leaks();
     if !leaked.is_empty() {
         for (section, field) in &leaked {
             eprintln!(
                 "{}",
                 format!(
-                    "error: [{section}] {field} is a secret — remove it from {} and set it in secrets.toml instead",
+                    "error: [{section}] {field} is a secret. Remove it from {} and set it in secrets.toml instead",
                     path.display()
                 )
                 .red()
@@ -486,8 +482,8 @@ pub fn init(force: bool) -> Result<()> {
         bail!("stacks.toml already exists (use --force to overwrite)");
     }
     std::fs::write(path, DEFAULT_STACK_TOML)?;
-    // secrets.toml lives beside stacks.toml. Generated ONLY when missing —
-    // an existing file is the user's and is never touched, even with --force.
+    // secrets.toml lives beside stacks.toml. Generated ONLY when missing, an existing file is the
+    // user's and is never touched, even with --force.
     crate::utils::secrets::generate_if_missing(Path::new("."))?;
     println!("Wrote stacks.toml — edit it, then run `stacksup start`.");
     Ok(())
@@ -497,15 +493,15 @@ const DEFAULT_STACK_TOML: &str = r#"# stacksup config
 # Everything under rendered/ is generated from this file; edit here, not there.
 #
 # Every service has a `mode`:
-#   "enabled"  — run and managed by this tool (docker compose)
-#   "external" — you run it elsewhere; we wire configs to it and health-check it
-#   "disabled" — not part of this stack
+#   "enabled"    run and managed by this tool (docker compose)
+#   "external"   you run it elsewhere; we wire configs to it and health-check it
+#   "disabled"   not part of this stack
 #
 # Managed services also take:
-#   `version` — the docker image tag to run (omit for this tool's default)
-#   `image`   — a custom docker image: a repository that keeps using
-#               `version`/the default tag, or a full ref with its own tag
-#               (then omit `version`)
+#   `version`    the docker image tag to run (omit for this tool's default)
+#   `image`      a custom docker image: a repository that keeps using
+#                `version`/the default tag, or a full ref with its own tag
+#                (then omit `version`)
 
 network = "testnet" # mainnet | testnet | custom network definition file
 

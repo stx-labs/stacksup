@@ -121,10 +121,10 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum ChainstateCommand {
-    /// Permanently delete on-disk chainstate — asks for confirmation first
+    /// Permanently delete on-disk chainstate, asks for confirmation first
     Wipe {
-        /// Single service's state to wipe (bitcoind, stacks-node,
-        /// stacks-signer, postgres); omit to wipe everything
+        /// Single service's state to wipe (bitcoind, stacks-node, stacks-signer, postgres); omit to
+        /// wipe everything
         service: Option<String>,
         /// Skip the confirmation prompt (for scripts)
         #[arg(long)]
@@ -137,9 +137,8 @@ enum ChainstateCommand {
         /// Which service's archive to fetch
         #[arg(long, value_enum, default_value_t = ServiceArg::All)]
         service: ServiceArg,
-        /// Specific archive: a filename (resolved against the network's
-        /// archive path), a full URL, or a local file path. Requires
-        /// --service node or --service api.
+        /// Specific archive: a filename (resolved against the network's archive path), a full URL,
+        /// or a local file path. Requires --service node or --service api.
         #[arg(long)]
         archive: Option<String>,
         /// Print the plan (sizes, versions, disk) and exit
@@ -157,8 +156,7 @@ enum ChainstateCommand {
         /// Keep downloaded archives after a successful restore
         #[arg(long)]
         keep_archives: bool,
-        /// Start the deployment (render + `stacksup start`) once the
-        /// chainstate is restored
+        /// Start the deployment (render + `stacksup start`) once the chainstate is restored
         #[arg(long)]
         start: bool,
     },
@@ -173,8 +171,8 @@ enum ServiceArg {
 
 fn main() {
     if let Err(e) = run() {
-        // `{e:#}` renders the whole context chain on one line; colored
-        // degrades to plain text when stderr isn't a terminal.
+        // `{e:#}` renders the whole context chain on one line; colored degrades to plain text when
+        // stderr isn't a terminal.
         eprintln!("{}", format!("Error: {e:#}").red());
         std::process::exit(1);
     }
@@ -321,8 +319,8 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
 
-    /// clap's built-in validation of the whole CLI definition: conflicting
-    /// flags, bad defaults, ambiguous subcommands all panic here.
+    /// clap's built-in validation of the whole CLI definition: conflicting flags, bad defaults,
+    /// ambiguous subcommands all panic here.
     #[test]
     fn cli_definition_is_coherent() {
         Cli::command().debug_assert();

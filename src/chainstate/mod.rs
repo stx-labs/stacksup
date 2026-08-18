@@ -1,4 +1,4 @@
-//! `stacksup chainstate` — operations on the stack's on-disk state.
+//! `stacksup chainstate`. Operations on the stack's on-disk state.
 //! More subcommands (snapshot, restore, ...) will land here.
 
 pub mod download;
@@ -21,12 +21,11 @@ struct Tip {
     note: Option<String>,
 }
 
-/// `stacksup chainstate status` — compare every enabled service's chain tip.
+/// `stacksup chainstate status`. Compare every enabled service's chain tip.
 ///
-/// Works whether the stack is running or stopped, with different coverage:
-/// the node's tips are read straight from its sqlite files (safe read-only
-/// even while the node writes), while the API's tip lives in Postgres and
-/// bitcoind's in LevelDB — those two are only checkable while running.
+/// Works whether the stack is running or stopped, with different coverage: the node's tips are read
+/// straight from its sqlite files (safe read-only even while the node writes), while the API's tip
+/// lives in Postgres and bitcoind's in LevelDB — those two are only checkable while running.
 pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     let running = crate::utils::docker::running_services(data_dir).unwrap_or_default();
     let mut tips: Vec<Tip> = Vec::new();
@@ -66,8 +65,8 @@ pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
         }
     }
 
-    // Verdict: what matters is the stacks height of the node vs the API,
-    // and crucially WHICH ONE is ahead — the failure modes are asymmetric.
+    // Verdict: what matters is the stacks height of the node vs the API, and crucially WHICH ONE is
+    // ahead, the failure modes are asymmetric.
     let node_stacks = tips
         .iter()
         .find(|t| t.service == "stacks-node")
@@ -115,14 +114,13 @@ pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The node's canonical view, read from its on-disk sqlite DBs (read-only
-/// opens are safe while the node runs).
+/// The node's canonical view, read from its on-disk sqlite DBs (read-only opens are safe while the
+/// node runs).
 ///
-/// Bitcoin height: latest pox-valid snapshot in the sortition DB. Stacks
-/// height: MAX over the chainstate headers DB (nakamoto_block_headers +
-/// epoch2 block_headers) — NOT the sortition snapshot's
-/// canonical_stacks_tip_height, which only advances per *burn* block and so
-/// lags by up to a tenure's worth of stacks blocks post-Nakamoto.
+/// Bitcoin height: latest pox-valid snapshot in the sortition DB. Stacks height: MAX over the
+/// chainstate headers DB (nakamoto_block_headers + epoch2 block_headers), NOT the sortition
+/// snapshot's canonical_stacks_tip_height, which only advances per *burn* block and so lags by up
+/// to a tenure's worth of stacks blocks post-Nakamoto.
 fn node_tip(deployment: &Deployment, data_dir: &Path) -> Tip {
     let mode = deployment.net.node.burnchain_mode.as_str();
     let node_dir = data_dir.join("chainstate/stacks-node").join(mode);
@@ -180,8 +178,8 @@ fn node_tip(deployment: &Deployment, data_dir: &Path) -> Tip {
     tip
 }
 
-/// bitcoind's own height via bitcoin-cli inside the running container.
-/// Offline its state is LevelDB, which we don't parse.
+/// bitcoind's own height via bitcoin-cli inside the running container. Offline its state is
+/// LevelDB, which we don't parse.
 fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
     let mut tip = Tip {
         service: "bitcoind",
@@ -196,8 +194,8 @@ fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
         return tip;
     }
     let chain = deployment.net.bitcoind.chain.as_str();
-    // bitcoin-cli inside the container authenticates via the datadir cookie
-    // file — no credentials needed (and none appear in process args).
+    // bitcoin-cli inside the container authenticates via the datadir cookie file, no credentials
+    // needed (and none appear in process args).
     let out = Command::new("docker")
         .args([
             "exec",
@@ -222,8 +220,8 @@ fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
     tip
 }
 
-/// The API's indexed tip from its Postgres chain_tip table (single-row table
-/// with block_height and burn_block_height). Needs the postgres server up.
+/// The API's indexed tip from its Postgres chain_tip table (single-row table with block_height and
+/// burn_block_height). Needs the postgres server up.
 fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
     let mut tip = Tip {
         service: "stacks-api",
@@ -275,9 +273,8 @@ fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
     tip
 }
 
-/// Services that keep on-disk state under chainstate/, with the running
-/// services that would be corrupted by wiping it out from under them
-/// (stacks-api writes into postgres's data).
+/// Services that keep on-disk state under chainstate/, with the running services that would be
+/// corrupted by wiping it out from under them (stacks-api writes into postgres's data).
 const CHAINSTATE_SERVICES: &[(&str, &[&str])] = &[
     ("bitcoind", &["bitcoind"]),
     ("stacks-node", &["stacks-node"]),

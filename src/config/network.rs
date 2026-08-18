@@ -1,7 +1,7 @@
 //! Network definitions: everything that varies between Stacks networks (burnchain endpoint, chain
 //! id, epochs, seeded balances, bootstrap peers) lives in a TOML definition file, not in code.
 //!
-//! Standard networks ship embedded in the binary from the repo's `networks/` directory — publishing
+//! Standard networks ship embedded in the binary from the repo's `networks/` directory, publishing
 //! a new testnet means adding a file there. A `network` value that names no embedded definition is
 //! resolved as a file path (or `networks/<name>.toml`) relative to the stacks.toml, so users can
 //! define custom networks without a tool release.
@@ -22,8 +22,7 @@ const EMBEDDED: &[(&str, &str)] = &[
 pub struct NetworkDef {
     pub name: String,
     pub chain_id: u32,
-    /// Path segment under archive.hiro.so; absent when no Hiro archives exist
-    /// for this network.
+    /// Path segment under archive.hiro.so; absent when no Hiro archives exist for this network.
     pub hiro_archive_path: Option<String>,
     pub bitcoind: BitcoindNet,
     pub node: NodeNet,
@@ -36,8 +35,8 @@ pub struct NetworkDef {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct BitcoindNet {
-    /// Whether this network can run its own bitcoind. False for networks
-    /// following a hosted burnchain (a fresh local chain can't join it).
+    /// Whether this network can run its own bitcoind. False for networks following a hosted
+    /// burnchain (a fresh local chain can't join it).
     pub allow_managed: bool,
     /// bitcoind -chain flag ("main", "test", "regtest")
     pub chain: String,
@@ -50,8 +49,7 @@ pub struct BitcoindNet {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NodeNet {
-    /// stacks-node [burnchain] mode; also the node's on-disk chainstate
-    /// subdirectory name.
+    /// stacks-node [burnchain] mode; also the node's on-disk chainstate subdirectory name.
     pub burnchain_mode: String,
     pub bootstrap_node: Option<String>,
     pub pox_prepare_length: Option<u32>,
@@ -72,15 +70,15 @@ pub struct Epoch {
     pub start_height: u64,
 }
 
-/// Resolve a `network = "..."` value: embedded name first, then a custom
-/// definition file relative to the directory holding stacks.toml.
+/// Resolve a `network = "..."` value: embedded name first, then a custom definition file relative
+/// to the directory holding stacks.toml.
 pub fn load(name: &str, config_dir: &Path) -> Result<NetworkDef> {
     if let Some((_, raw)) = EMBEDDED.iter().find(|(n, _)| *n == name) {
         return parse(raw).with_context(|| format!("embedded network definition `{name}`"));
     }
 
-    // Custom definitions resolve relative to stacks.toml only — an absolute
-    // path would silently bypass config_dir (Path::join discards the base).
+    // Custom definitions resolve relative to stacks.toml only, an absolute path would silently
+    // bypass config_dir (Path::join discards the base).
     if Path::new(name).is_absolute() {
         bail!(
             "network `{name}`: custom definition paths must be relative to the \
@@ -99,7 +97,7 @@ pub fn load(name: &str, config_dir: &Path) -> Result<NetworkDef> {
     }
 
     bail!(
-        "unknown network `{name}` — built-in networks: {}; or point at a custom \
+        "unknown network `{name}`. Built-in networks: {}; or point at a custom \
          definition file (`network = \"my-net.toml\"`, resolved next to stacks.toml)",
         EMBEDDED
             .iter()
@@ -111,8 +109,8 @@ pub fn load(name: &str, config_dir: &Path) -> Result<NetworkDef> {
 
 fn parse(raw: &str) -> Result<NetworkDef> {
     let def: NetworkDef = toml::from_str(raw)?;
-    // Missing fields are already serde errors (nothing here is defaulted);
-    // these guards catch the empty/zero values serde accepts.
+    // Missing fields are already serde errors (nothing here is defaulted); these guards catch the
+    // empty/zero values serde accepts.
     if def.name.is_empty() || def.node.burnchain_mode.is_empty() {
         bail!("network definition must set `name` and [node] burnchain_mode");
     }

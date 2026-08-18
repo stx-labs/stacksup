@@ -1,6 +1,6 @@
-//! Version parsing/comparison shared by `chainstate download` and `upgrade`:
-//! numeric-tuple versions (semver `9.1.0` and stacks-core's five-part
-//! `3.1.0.0.8` compare the same way) and pulled-image version resolution.
+//! Version parsing/comparison shared by `chainstate download` and `upgrade`: numeric-tuple versions
+//! (semver `9.1.0` and stacks-core's five-part `3.1.0.0.8` compare the same way) and pulled-image
+//! version resolution.
 
 use std::process::Command;
 
@@ -25,9 +25,8 @@ pub fn version_string(v: &[u64]) -> String {
     v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
 }
 
-/// Numeric prefix of a distro-suffixed tag ("16.5-alpine" -> "16.5",
-/// "17-bookworm" -> "17"); tags without a numeric prefix ("latest",
-/// "bookworm") are returned unchanged.
+/// Numeric prefix of a distro-suffixed tag ("16.5-alpine" -> "16.5", "17-bookworm" -> "17"); tags
+/// without a numeric prefix ("latest", "bookworm") are returned unchanged.
 pub fn strip_tag_suffix(tag: &str) -> &str {
     match tag.split_once('-') {
         Some((prefix, _)) if parse_version(prefix).is_some() => prefix,
@@ -35,14 +34,14 @@ pub fn strip_tag_suffix(tag: &str) -> &str {
     }
 }
 
-/// Whether an image ref carries an explicit tag. A colon whose right side
-/// contains `/` is a registry port (`localhost:5000/repo`), not a tag.
+/// Whether an image ref carries an explicit tag. A colon whose right side contains `/` is a
+/// registry port (`localhost:5000/repo`), not a tag.
 pub fn has_explicit_tag(image: &str) -> bool {
     matches!(image.rsplit_once(':'), Some((_, tag)) if !tag.contains('/'))
 }
 
-/// Tag of an image ref, defaulting to `latest` when untagged. A colon whose
-/// right side contains `/` is a registry port (`localhost:5000/repo`), not a tag.
+/// Tag of an image ref, defaulting to `latest` when untagged. A colon whose right side contains `/`
+/// is a registry port (`localhost:5000/repo`), not a tag.
 pub fn image_tag(image: &str) -> String {
     match image.rsplit_once(':') {
         Some((_, tag)) if !tag.contains('/') => tag.to_string(),
@@ -51,8 +50,8 @@ pub fn image_tag(image: &str) -> String {
 }
 
 /// Concrete version of a locally pulled image, from its OCI version label
-/// (`org.opencontainers.image.version` — present on stacks-core and
-/// stacks-blockchain-api images). Local inspect only; never pulls.
+/// (`org.opencontainers.image.version`, present on stacks-core and stacks-blockchain-api images).
+/// Local inspect only; never pulls.
 pub fn pulled_image_version(image: &str) -> Option<Vec<u64>> {
     let out = Command::new("docker")
         .args([

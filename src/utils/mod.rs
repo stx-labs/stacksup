@@ -1,4 +1,4 @@
-//! Shared helpers used across commands — not commands themselves.
+//! Shared helpers used across commands, not commands themselves.
 
 pub mod docker;
 pub mod secrets;
