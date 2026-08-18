@@ -1,10 +1,8 @@
-//! `stacksup chainstate download` — seed chainstate from the Hiro Archive.
+//! `stacksup chainstate download`. Seed chainstate from the Hiro Archive.
 //!
-//! Archives are huge (10s–100s of GB), so the pipeline is two-phase by
-//! design: download to `<data-dir>/downloads/<name>.partial` (resumable via
-//! HTTP Range; re-running the command continues where it left off), verify
-//! sha256, and only then restore — never extract an unverified archive over
-//! existing chainstate.
+//! Archives are huge (10s–100s of GB), so the pipeline is two-phase by design: download to
+//! `<data-dir>/downloads/<name>.partial` (resumable via HTTP Range; re-running the command
+//! continues where it left off), verify sha256, and only then restore.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -36,8 +34,8 @@ pub struct Opts {
     pub no_verify: bool,
     pub skip_version_check: bool,
     pub keep_archives: bool,
-    /// The caller will start the deployment after a successful restore
-    /// (only changes the final hint; starting is the caller's job).
+    /// The caller will start the deployment after a successful restore (only changes the final
+    /// hint; starting is the caller's job).
     pub start: bool,
 }
 
@@ -59,14 +57,13 @@ struct Job {
     image: String,
 }
 
-/// Returns `true` when archives were actually restored — `false` on
-/// `--check-only` or a declined confirmation, so callers gating follow-up
-/// work (like `--start`) don't act on a no-op run.
+/// Returns `true` when archives were actually restored, `false` on `--check-only` or a declined
+/// confirmation, so callers gating follow-up work (like `--start`) don't act on a no-op run.
 pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool> {
     let network = deployment.net.hiro_archive_path.clone().with_context(|| {
         format!(
-            "network `{}` has no published archives (no hiro_archive_path in its definition) — \
-             use --archive to point at a file explicitly",
+            "network `{}` has no published archives (no hiro_archive_path in its definition). \
+             Use --archive to point at a file explicitly.",
             deployment.network
         )
     })?;
@@ -76,7 +73,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
         && !running.is_empty()
     {
         bail!(
-            "the stack is running ({}) — run `stacksup stop` first",
+            "the stack is running ({}). Run `stacksup stop` first",
             running.join(", ")
         );
     }
@@ -153,7 +150,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
                 println!(
                     "    {}",
                     format!(
-                        "✗ archive {a} is NEWER than configured {c} — chainstate from newer \
+                        "✗ archive {a} is NEWER than configured {c}. Chainstate from newer \
                          software cannot be used by older software.\n    Fix: raise [{}] version \
                          in stacks.toml, or pick an older archive with --archive.",
                         section_name(job.kind)
@@ -176,7 +173,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
     if opts.no_verify {
         println!(
             "\n{}",
-            "⚠ sha256 verification disabled — a corrupted download may fail at restore or, \
+            "⚠ sha256 verification disabled. A corrupted download may fail at restore or, \
              worse, restore silently."
                 .yellow()
         );
@@ -220,7 +217,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
     }
     println!(
         "{}",
-        "\nTip: safe to Ctrl-C and re-run later — downloads resume where they left off.\n\
+        "\nTip: safe to Ctrl-C and re-run later. Downloads resume where they left off.\n\
          To run unattended:  nohup stacksup chainstate download --yes > download.log 2>&1 &\n"
             .dimmed()
     );
@@ -254,7 +251,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
                         fs::rename(&job.file, &quarantine)?;
                         bail!(
                             "sha256 mismatch for {name}\n  expected {expected}\n  actual   {actual}\n\
-                             moved to {} — re-run to download again",
+                             moved to {}. Re-run to download again",
                             quarantine.display()
                         );
                     }
@@ -262,7 +259,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
                 }
                 None => println!(
                     "  {}",
-                    "⚠ no .sha256 available for this archive — skipping verification".yellow()
+                    "⚠ no .sha256 available for this archive. Skipping verification".yellow()
                 ),
             }
         }
@@ -293,10 +290,9 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
 // ---------------------------------------------------------------------------
 // Job construction
 
-/// Resolve the newest *versioned* archive from the bucket listing. We never
-/// use the `-latest` objects: they are byte-identical pointers to the newest
-/// dated archive but carry no version in their name, which would defeat the
-/// archive-version ≤ configured-version check.
+/// Resolve the newest *versioned* archive from the bucket listing. We never use the `-latest`
+/// objects: they are byte-identical pointers to the newest dated archive but carry no version in
+/// their name, which would defeat the archive-version ≤ configured-version check.
 fn latest_node_job(network: &str, deployment: &Deployment, downloads: &Path) -> Result<Job> {
     let base = format!("{ARCHIVE_BASE}/{network}/stacks-blockchain");
     let name = newest_in_listing(
@@ -336,8 +332,8 @@ fn versioned_job(
     })
 }
 
-/// Fetch the archive directory's HTML bucket listing and return the newest
-/// dated archive matching `prefix` + one of `extensions` (excluding -latest).
+/// Fetch the archive directory's HTML bucket listing and return the newest dated archive matching
+/// `prefix` + one of `extensions` (excluding -latest).
 fn newest_in_listing(base: &str, prefix: &str, extensions: &[&str]) -> Result<String> {
     let listing_url = format!("{base}/");
     let html = ureq::get(&listing_url)
@@ -367,8 +363,8 @@ fn newest_in_listing(base: &str, prefix: &str, extensions: &[&str]) -> Result<St
     }
     best.map(|(_, _, name)| name).with_context(|| {
         format!(
-            "no versioned archives matching `{prefix}*` found in {listing_url} — \
-             the listing format may have changed; use --archive to pin a file explicitly"
+            "no versioned archives matching `{prefix}*` found in {listing_url}. \
+             The listing format may have changed. Use --archive to pin a file explicitly."
         )
     })
 }
@@ -442,9 +438,9 @@ fn pinned_job(
     };
     let name = url.rsplit('/').next().unwrap_or(archive).to_string();
 
-    // `-latest` objects are byte-identical to the newest dated archive but
-    // carry no version, defeating the compatibility check — point at the
-    // versioned equivalent instead (or just omit --archive).
+    // `-latest` objects are byte-identical to the newest dated archive but carry no version,
+    // defeating the compatibility check. Point at the versioned equivalent instead (or just omit
+    // --archive).
     if name.contains("-latest") {
         bail!(
             "`{name}` is a -latest pointer; use the equivalent versioned archive \
@@ -476,10 +472,9 @@ fn pinned_job(
 // ---------------------------------------------------------------------------
 // Version validation
 
-/// API dumps are produced by a specific postgres major (it's in the archive
-/// name); pg_restore into an OLDER server is not supported. Same ladder as
-/// the service check: explicit tag settles it, floating tags consult the
-/// pulled image, unknown warns.
+/// API dumps are produced by a specific postgres major (it's in the archive name); pg_restore into
+/// an OLDER server is not supported. Same ladder as the service check: explicit tag settles it,
+/// floating tags consult the pulled image, unknown warns.
 fn pg_verdict(job: &Job, deployment: &Deployment, version_problem: &mut bool) {
     let archive_pg = job
         .file
@@ -504,7 +499,7 @@ fn pg_verdict(job: &Job, deployment: &Deployment, version_problem: &mut bool) {
             println!(
                 "    {}",
                 format!(
-                    "✗ archive was dumped by postgres {a}, newer than deployed postgres {c} — \
+                    "✗ archive was dumped by postgres {a}, newer than deployed postgres {c}. \
                      pg_restore into an older server is not supported.\n    Fix: raise [postgres] \
                      version in stacks.toml, or pick an older archive with --archive."
                 )
@@ -529,9 +524,9 @@ enum VersionVerdict {
 
 fn version_verdict(job: &Job) -> VersionVerdict {
     let tag = image_tag(&job.image);
-    // Only inspected when the tag alone can't settle it (floating tags like
-    // `9` or `latest`): the pulled image's OCI version label carries the
-    // concrete version (e.g. tag `9` -> label `9.0.2`).
+    // Only inspected when the tag alone can't settle it (floating tags like `9` or `latest`): the
+    // pulled image's OCI version label carries the concrete version (e.g. tag `9` -> label
+    // `9.0.2`).
     classify_version(job.archive_version.as_deref(), &tag, || {
         pulled_image_version(&job.image)
     })
@@ -552,9 +547,9 @@ fn classify_version(
             if compare_versions(archive, &conf) != std::cmp::Ordering::Greater {
                 return VersionVerdict::Ok(a, version_string(&conf));
             }
-            // Archive "newer" than the tag — but a partial tag like `9` is a
-            // floating tag that may currently BE 9.0.2. If the tag is a
-            // prefix of the archive version, ask the pulled image.
+            // Archive "newer" than the tag, but a partial tag like `9` is a floating tag that may
+            // currently BE 9.0.2. If the tag is a prefix of the archive version, ask the pulled
+            // image.
             if archive.starts_with(&conf) {
                 match pulled() {
                     Some(p) if compare_versions(archive, &p) != std::cmp::Ordering::Greater => {
@@ -566,13 +561,13 @@ fn classify_version(
                     Some(p) => VersionVerdict::TooNew(
                         a,
                         format!(
-                            "{} (pulled image for tag `{tag}` — `docker pull` a newer one)",
+                            "{} (pulled image for tag `{tag}`. `docker pull` a newer one)",
                             version_string(&p)
                         ),
                     ),
                     None => VersionVerdict::Unknown(format!(
                         "tag `{tag}` is a floating tag and the archive is {a}; could not read the \
-                         pulled image's version label (image not pulled?) — `docker pull` it and re-run"
+                         pulled image's version label (image not pulled?). `docker pull` it and re-run"
                     )),
                 }
             } else {
@@ -589,12 +584,12 @@ fn classify_version(
             Some(p) => VersionVerdict::TooNew(
                 a,
                 format!(
-                    "{} (pulled image for tag `{tag}` — `docker pull` a newer one)",
+                    "{} (pulled image for tag `{tag}`. `docker pull` a newer one)",
                     version_string(&p)
                 ),
             ),
             None => VersionVerdict::Unknown(format!(
-                "configured tag is `{tag}` and no pulled image to inspect — pin a version in \
+                "configured tag is `{tag}` and no pulled image to inspect. Pin a version in \
                  stacks.toml or `docker pull` the image to make this check meaningful"
             )),
         },
@@ -604,8 +599,7 @@ fn classify_version(
 /// Extract the service version from a versioned archive filename.
 /// node: `mainnet-stacks-blockchain-3.1.0.0.8-20260803.tar.gz`
 /// api:  `stacks-blockchain-api-pg-17-8.1.0-20260803.dump`
-/// The version is the dotted numeric segment (dates have no dots, the pg
-/// major has no dots).
+/// The version is the dotted numeric segment (dates have no dots, the pg major has no dots).
 fn parse_version_from_name(name: &str, _kind: Kind) -> Option<Vec<u64>> {
     name.split(['-', '_'])
         .filter(|seg| seg.contains('.'))
@@ -639,9 +633,9 @@ fn parse_pg_major_from_name(name: &str) -> Option<Vec<u64>> {
 // ---------------------------------------------------------------------------
 // Download engine
 
-/// Follow redirects manually and return the final URL. archive.hiro.so 302s
-/// to short-lived presigned R2 URLs, and resume only works if the Range
-/// header is sent to the final URL — so every request path resolves first.
+/// Follow redirects manually and return the final URL. archive.hiro.so 302s to short-lived
+/// presigned R2 URLs, and resume only works if the Range header is sent to the final URL, so every
+/// request path resolves first.
 fn resolve_redirects(url: &str) -> Result<String> {
     let agent = ureq::AgentBuilder::new().redirects(0).build();
     let mut current = url.to_string();
@@ -667,8 +661,8 @@ fn resolve_redirects(url: &str) -> Result<String> {
     bail!("too many redirects for {url}");
 }
 
-/// Size probe via a 1-byte Range GET (HEAD doesn't survive the presigned
-/// redirect). 206 -> total from Content-Range; 200 -> Content-Length.
+/// Size probe via a 1-byte Range GET (HEAD doesn't survive the presigned redirect). 206 -> total
+/// from Content-Range; 200 -> Content-Length.
 fn head_content_length(url: &str) -> Option<Option<u64>> {
     let resolved = resolve_redirects(url).ok()?;
     let resp = ureq::get(&resolved).set("Range", "bytes=0-0").call().ok()?;
@@ -686,9 +680,8 @@ fn head_content_length(url: &str) -> Option<Option<u64>> {
     }
 }
 
-/// Resumable download: writes `<dest>.partial` + `<dest>.etag`, continues via
-/// HTTP Range, restarts cleanly if the server object changed or Range is
-/// unsupported, renames into place when complete.
+/// Resumable download: writes `<dest>.partial` + `<dest>.etag`, continues via HTTP Range, restarts
+/// cleanly if the server object changed or Range is unsupported, renames into place when complete.
 fn download_resumable(url: &str, dest: &Path, expected_size: Option<u64>) -> Result<()> {
     let partial = dest.with_extension(format!(
         "{}.partial",
@@ -708,8 +701,8 @@ fn download_resumable(url: &str, dest: &Path, expected_size: Option<u64>) -> Res
         .call()
         .with_context(|| format!("request failed: {url}"))?;
 
-    // Stale-partial guard: if the server's object changed since we started,
-    // the old bytes belong to a different archive.
+    // Stale-partial guard: if the server's object changed since we started, the old bytes belong to
+    // a different archive.
     let server_etag = resp
         .header("ETag")
         .or_else(|| resp.header("Last-Modified"))
@@ -934,8 +927,8 @@ fn restore_api(
     data_dir: &Path,
     downloads_dir: &Path,
 ) -> Result<()> {
-    // pg_restore --jobs needs a seekable file inside the container; the
-    // postgres service mounts <data-dir>/downloads at /downloads (read-only).
+    // pg_restore --jobs needs a seekable file inside the container; the postgres service mounts
+    // <data-dir>/downloads at /downloads (read-only).
     let dump = if dump.starts_with(downloads_dir) {
         dump.to_path_buf()
     } else {
@@ -1088,8 +1081,8 @@ fn format_bytes(b: u64) -> String {
     format!("{v:.1} {}", UNITS[unit])
 }
 
-/// Free bytes on the filesystem containing `dir`, via `df -Pk` (portable
-/// across macOS/Linux; no direct std API for statvfs).
+/// Free bytes on the filesystem containing `dir`, via `df -Pk` (portable across macOS/Linux; no
+/// direct std API for statvfs).
 fn free_disk_bytes(dir: &Path) -> Option<u64> {
     let out = Command::new("df").arg("-Pk").arg(dir).output().ok()?;
     if !out.status.success() {

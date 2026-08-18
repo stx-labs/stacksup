@@ -16,8 +16,7 @@ fn image(
     version: Option<&str>,
 ) -> String {
     match image_override {
-        // Full ref with its own tag: used verbatim (validation rejects a
-        // conflicting `version`).
+        // Full ref with its own tag: used verbatim (validation rejects a conflicting `version`).
         Some(full) if crate::utils::versions::has_explicit_tag(full) => full.to_string(),
         // Repository override: tag still comes from `version`/the default.
         Some(repo) => format!("{repo}:{}", version.unwrap_or(default_tag)),
@@ -142,9 +141,8 @@ pub fn roster(deployment: &Deployment) -> Vec<(&'static str, ServiceMode)> {
     ]
 }
 
-/// Every (service, host port) this deployment publishes when started —
-/// the base ports shifted by `port_offset`. Used by the start preflight to
-/// test-bind before compose does.
+/// Every (service, host port) this deployment publishes when started, the base ports shifted by
+/// `port_offset`. Used by the start preflight to test-bind before compose does.
 pub fn published_ports(deployment: &Deployment) -> Vec<(&'static str, u16)> {
     let mut ports = Vec::new();
     if deployment.bitcoind.mode == ServiceMode::Enabled {

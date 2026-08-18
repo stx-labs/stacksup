@@ -1,9 +1,9 @@
-//! `stacksup logs export` — package logs (and diagnostic context) into a shareable file for
+//! `stacksup logs export` packages logs (and diagnostic context) into a shareable file for
 //! troubleshooting.
 //!
 //! Default output is a support bundle: per-service logs plus versions, ps, images, redacted
 //! configs, and the chainstate/config check reports. All text passes through redaction (known
-//! secret values + password/token/key lines) so the artifact is safe to hand to someone else —
+//! secret values + password/token/key lines) so the artifact is safe to hand to someone else,
 //! though the final message still tells the user to review it.
 
 use std::fs;
@@ -41,8 +41,8 @@ pub fn run(deployment: &Deployment, config_path: &Path, data_dir: &Path, opts: O
         bail!("no enabled services in stacks.toml — nothing to export");
     }
 
-    // Containers that still exist (logs live inside them). `stacksup stop`
-    // keeps them; `stacksup stop --destroy` removes them along with their logs.
+    // Containers that still exist (logs live inside them). `stacksup stop` keeps them; `stacksup
+    // stop --destroy` removes them along with their logs.
     let existing: Vec<String> =
         crate::utils::docker::compose_capture(data_dir, &["ps", "-a", "--services"])?
             .lines()
@@ -186,8 +186,8 @@ fn capture_logs(data_dir: &Path, service: &str, since: &str) -> String {
     .unwrap_or_else(|e| format!("failed to collect logs: {e}\n"))
 }
 
-/// Run one of our own subcommands and capture its report (colored degrades to
-/// plain text automatically because the output is not a terminal).
+/// Run one of our own subcommands and capture its report (colored degrades to plain text
+/// automatically because the output is not a terminal).
 fn self_report(config_path: &Path, data_dir: &Path, args: &[&str]) -> String {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -243,9 +243,8 @@ fn secret_values(deployment: &Deployment) -> Vec<String> {
     v
 }
 
-/// Two-pass scrub: exact secret values anywhere, then any line whose key
-/// looks credential-ish (covers defaults we didn't collect and container
-/// startup echoes).
+/// Two-pass scrub: exact secret values anywhere, then any line whose key looks credential-ish
+/// (covers defaults we didn't collect and container startup echoes).
 fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
     for secret in secrets {

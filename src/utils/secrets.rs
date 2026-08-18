@@ -1,13 +1,12 @@
-//! The secrets overlay: `secrets.toml` lives beside `stacks.toml`, holds ONLY
-//! sensitive values (clear text, mode 0600, never committed), and is merged
-//! into the deployment config at load time.
+//! The secrets overlay: `secrets.toml` lives beside `stacks.toml`, holds ONLY sensitive values
+//! (clear text, mode 0600, never committed), and is merged into the deployment config at load time.
 //!
 //! Contract:
-//! - The tool NEVER modifies an existing secrets.toml. `config init` creates
-//!   one with generated values only when none exists; anything missing later
-//!   is an error telling the user exactly what to add.
-//! - Secret-bearing fields are rejected in stacks.toml — they must come from
-//!   the overlay, so the committable config never contains credentials.
+//! - The tool NEVER modifies an existing secrets.toml. `config init` creates one with generated
+//!   values only when none exists; anything missing later is an error telling the user exactly what
+//!   to add.
+//! - Secret-bearing fields are rejected in stacks.toml — they must come from the overlay, so the
+//!   committable config never contains credentials.
 
 use std::path::{Path, PathBuf};
 
@@ -18,16 +17,14 @@ use sha2::Sha256;
 
 pub const SECRETS_FILE: &str = "secrets.toml";
 
-/// Secret values are interpolated into rendered TOML, env files, and the
-/// compose file, so they are validated to an alphabet that is inert in all
-/// of those formats: printable ASCII without whitespace, quotes, backslash,
-/// `$` (compose interpolation), or backtick.
+/// Secret values are interpolated into rendered TOML, env files, and the compose file, so they are
+/// validated to an alphabet that is inert in all of those formats: printable ASCII without
+/// whitespace, quotes, backslash, `$` (compose interpolation), or backtick.
 const MIN_SECRET_LEN: usize = 8;
 const MAX_SECRET_LEN: usize = 128;
 
-/// The overlay mirrors stacks.toml's structure, restricted to secret-bearing
-/// fields. `deny_unknown_fields` makes typos and non-secret config in this
-/// file loud errors.
+/// The overlay mirrors stacks.toml's structure, restricted to secret-bearing fields.
+/// `deny_unknown_fields` makes typos and non-secret config in this file loud errors.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SecretsOverlay {
@@ -62,18 +59,16 @@ fn secrets_path(data_dir: &Path) -> PathBuf {
     data_dir.join(SECRETS_FILE)
 }
 
-/// Load the overlay. Missing file is `None`; `config::load` then reports the
-/// deployment's required secrets as missing. Present values are validated
-/// (permissions, length, alphabet) so bad ones fail here with a precise
-/// message instead of producing broken rendered configs.
+/// Load the overlay. Missing file is `None`; `config::load` then reports the deployment's required
+/// secrets as missing. Present values are validated (permissions, length, alphabet) so bad ones
+/// fail here with a precise message instead of producing broken rendered configs.
 pub fn load(data_dir: &Path) -> Result<Option<SecretsOverlay>> {
     let path = secrets_path(data_dir);
     if !path.exists() {
         return Ok(None);
     }
-    // The file holds clear-text credentials: refuse to proceed while other
-    // users can read it. Fixing the mode is the user's move — this tool
-    // never modifies the file, permissions included.
+    // The file holds clear-text credentials: refuse to proceed while other users can read it.
+    // Fixing the mode is the user's move, this tool never modifies the file, permissions included.
     let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path)?.permissions());
     if mode & 0o077 != 0 {
         bail!(
@@ -101,9 +96,8 @@ pub fn load(data_dir: &Path) -> Result<Option<SecretsOverlay>> {
     Ok(Some(overlay))
 }
 
-/// Every present value must be long enough to redact safely and free of
-/// characters that need escaping in any rendered format (TOML strings, env
-/// files, compose commands).
+/// Every present value must be long enough to redact safely and free of characters that need
+/// escaping in any rendered format (TOML strings, env files, compose commands).
 fn validate_values(overlay: &SecretsOverlay, path: &Path) -> Result<()> {
     let fields: [(&str, &str, &Option<String>); 4] = [
         ("bitcoind", "rpc_user", &overlay.bitcoind.rpc_user),
@@ -135,8 +129,8 @@ fn validate_values(overlay: &SecretsOverlay, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Create secrets.toml with generated values — ONLY when it does not exist.
-/// An existing file is the user's; it is never touched.
+/// Create secrets.toml with generated values, ONLY when it does not exist. An existing file is the
+/// user's; it is never touched.
 pub fn generate_if_missing(data_dir: &Path) -> Result<()> {
     let path = secrets_path(data_dir);
     if path.exists() {
@@ -151,8 +145,8 @@ pub fn generate_if_missing(data_dir: &Path) -> Result<()> {
          [bitcoind]\nrpc_user = \"stacksup-{}\"\nrpc_password = \"{}\"\n\n\
          [stacks-node]\nauth_token = \"{}\"\n",
         random_hex(32)?,
-        // rpc_user is redacted in `logs export`; a random suffix keeps that
-        // exact-value scrub from also eating every plain "stacksup" in logs.
+        // rpc_user is redacted in `logs export`; a random suffix keeps that exact-value scrub from
+        // also eating every plain "stacksup" in logs.
         random_hex(4)?,
         random_hex(32)?,
         random_hex(32)?,
@@ -165,8 +159,7 @@ pub fn generate_if_missing(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Write a file readable only by the owner; permissions are set before the
-/// content is written.
+/// Write a file readable only by the owner; permissions are set before the content is written.
 pub fn write_0600(path: &Path, content: &str) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -192,9 +185,9 @@ fn random_hex(bytes: usize) -> Result<String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// bitcoind's `-rpcauth` line derived from the clear-text credentials
-/// (share/rpcauth/rpcauth.py): `user:salt$hex(hmac_sha256(key=salt, msg=password))`.
-/// Never stored — a hand-edited password can't drift from its hash.
+/// bitcoind's `-rpcauth` line derived from the clear-text credentials (share/rpcauth/rpcauth.py):
+/// `user:salt$hex(hmac_sha256(key=salt, msg=password))`. Never stored — a hand-edited password
+/// can't drift from its hash.
 pub fn bitcoind_rpcauth(user: &str, password: &str) -> String {
     let salt = derived_salt(user, password);
     let mut mac = Hmac::<Sha256>::new_from_slice(salt.as_bytes()).expect("hmac accepts any key");
@@ -208,18 +201,17 @@ pub fn bitcoind_rpcauth(user: &str, password: &str) -> String {
     format!("{user}:{salt}${digest}")
 }
 
-/// Deterministic salt so the rpcauth line (and the rendered compose file) is
-/// stable across renders. Salt secrecy is not load-bearing in the rpcauth
-/// scheme — bitcoind stores it in plaintext beside the hash.
+/// Deterministic salt so the rpcauth line (and the rendered compose file) is stable across renders.
+/// Salt secrecy is not load-bearing in the rpcauth scheme, bitcoind stores it in plaintext beside
+/// the hash.
 fn derived_salt(user: &str, password: &str) -> String {
     use sha2::Digest;
     let digest = Sha256::digest(format!("{user}:{password}").as_bytes());
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// bail! with a ready-to-paste snippet listing the missing secret fields,
-/// one table per section (fields sharing a section are grouped so the
-/// snippet is valid TOML).
+/// bail! with a ready-to-paste snippet listing the missing secret fields, one table per section
+/// (fields sharing a section are grouped so the snippet is valid TOML).
 pub fn missing_secrets_error(data_dir: &Path, missing: &[(&str, &str)]) -> anyhow::Error {
     let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
     for (section, field) in missing {

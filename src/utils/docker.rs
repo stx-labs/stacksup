@@ -1,6 +1,5 @@
-//! Lifecycle: thin wrapper over `docker compose` for managed services.
-//! Observation (status/health) will move to the Docker Engine API (bollard)
-//! later; compose owns orchestration either way.
+//! Lifecycle: thin wrapper over `docker compose` for managed services. Observation (status/health)
+//! will move to the Docker Engine API (bollard) later; compose owns orchestration either way.
 
 use std::path::Path;
 use std::process::Command;
@@ -14,15 +13,14 @@ use crate::utils::services::roster;
 
 fn compose(data_dir: &Path) -> Command {
     let mut cmd = Command::new("docker");
-    // No -p: the rendered compose file carries its project via `name:`,
-    // so every invocation (ours or a bare `docker compose -f ...`) is scoped
-    // to this deployment.
+    // No -p: the rendered compose file carries its project via `name:`, so every invocation (ours
+    // or a bare `docker compose -f ...`) is scoped to this deployment.
     cmd.args(["compose", "-f"]).arg(compose_file(data_dir));
     cmd
 }
 
-/// Docker Engine server version, distinguishing "not installed" from
-/// "daemon not running" so the operator gets the right fix.
+/// Docker Engine server version, distinguishing "not installed" from "daemon not running" so the
+/// operator gets the right fix.
 pub fn daemon_version() -> Result<String> {
     match Command::new("docker")
         .args(["version", "--format", "{{.Server.Version}}"])
@@ -60,9 +58,9 @@ fn ensure_docker() -> Result<()> {
     Ok(())
 }
 
-/// Refuse to start when this deployment's name is already in use by a compose
-/// project rendered from a DIFFERENT directory — otherwise compose silently
-/// adopts (and replaces) the other deployment's containers.
+/// Refuse to start when this deployment's name is already in use by a compose project rendered from
+/// a DIFFERENT directory, otherwise compose silently adopts (and replaces) the other deployment's
+/// containers.
 fn guard_project_collision(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     let out = Command::new("docker")
         .args(["compose", "ls", "--all", "--format", "json"])
@@ -89,8 +87,8 @@ struct ComposeLsEntry {
     config_files: String,
 }
 
-/// Pure half of the collision check: does `ls_json` (docker compose ls
-/// output) contain `project` with a config file other than ours?
+/// Pure half of the collision check: does `ls_json` (docker compose ls output) contain `project`
+/// with a config file other than ours?
 fn project_conflict(ls_json: &str, project: &str, our_compose_file: &Path) -> Option<String> {
     let ours = our_compose_file
         .canonicalize()
@@ -114,9 +112,9 @@ fn project_conflict(ls_json: &str, project: &str, our_compose_file: &Path) -> Op
     None
 }
 
-/// A port conflicts only when a bind fails with AddrInUse on SOME family —
-/// an unsupported family (e.g. no IPv6) or a permission error is not a
-/// conflict. Mirrors how docker publishes on both stacks.
+/// A port conflicts only when a bind fails with AddrInUse on SOME family, an unsupported family
+/// (e.g. no IPv6), or a permission error is not a conflict. Mirrors how docker publishes on both
+/// stacks.
 fn port_taken(port: u16) -> bool {
     ["0.0.0.0", "::"]
         .iter()
@@ -126,9 +124,9 @@ fn port_taken(port: u16) -> bool {
         })
 }
 
-/// Test-bind every host port the deployment is about to publish, skipping
-/// services that are already running (their ports are legitimately ours).
-/// Catches port squatting BEFORE compose creates half a stack.
+/// Test-bind every host port the deployment is about to publish, skipping services that are already
+/// running (their ports are legitimately ours). Catches port squatting BEFORE compose creates half
+/// a stack.
 fn guard_published_ports(
     deployment: &Deployment,
     data_dir: &Path,
@@ -155,8 +153,8 @@ fn guard_published_ports(
     Ok(())
 }
 
-/// Names of this stack's currently running compose services. Best effort:
-/// `None` when docker or the rendered compose file is unavailable.
+/// Names of this stack's currently running compose services. Best effort: `None` when docker or the
+/// rendered compose file is unavailable.
 pub fn running_services(data_dir: &Path) -> Option<Vec<String>> {
     if !compose_file(data_dir).exists() {
         return None;
@@ -190,8 +188,8 @@ pub fn compose_stop_service(data_dir: &Path, service: &str) -> Result<()> {
     run(cmd, "docker compose stop")
 }
 
-/// Run a compose subcommand and capture its stdout (stderr appended on
-/// failure instead of erroring — support bundles want best-effort output).
+/// Run a compose subcommand and capture its stdout (stderr appended on failure instead of erroring,
+/// support bundles want best-effort output).
 pub(crate) fn compose_capture(data_dir: &Path, args: &[&str]) -> Result<String> {
     let mut cmd = compose(data_dir);
     cmd.args(args);
@@ -339,8 +337,8 @@ pub fn stop(
 
     if let Some(name) = service {
         ensure_enabled(deployment, name)?;
-        // Single service: `compose stop` halts just that container, leaving
-        // the rest of the stack (and the network) running.
+        // Single service: `compose stop` halts just that container, leaving the rest of the stack
+        // (and the network) running.
         let mut cmd = compose(data_dir);
         cmd.args(["stop", name]);
         run(cmd, "docker compose stop")?;
@@ -349,15 +347,15 @@ pub fn stop(
     }
 
     if destroy {
-        // `down` removes containers (and their logs) and the network. It only
-        // ever touches the compose project; external services and their data
-        // are outside this tool's blast radius by construction.
+        // `down` removes containers (and their logs) and the network. It only ever touches the
+        // compose project; external services and their data are outside this tool's blast radius by
+        // construction.
         let mut cmd = compose(data_dir);
         cmd.arg("down");
         run(cmd, "docker compose down")?;
     } else {
-        // Halt containers but keep them (and their logs) so issues can still
-        // be inspected/exported after stopping. `--destroy` for full cleanup.
+        // Halt containers but keep them (and their logs) so issues can still be inspected/exported
+        // after stopping. `--destroy` for full cleanup.
         let mut cmd = compose(data_dir);
         cmd.arg("stop");
         run(cmd, "docker compose stop")?;
@@ -378,9 +376,9 @@ pub fn stop(
     Ok(())
 }
 
-/// Restart = stop + up. Deliberately not `docker compose restart`, which
-/// reuses the existing container: going through `up` means a re-rendered
-/// config or freshly pulled image takes effect on restart.
+/// Restart = stop + up. Deliberately not `docker compose restart`, which reuses the existing
+/// container: going through `up` means a re-rendered config or freshly pulled image takes effect on
+/// restart.
 pub fn restart(deployment: &Deployment, data_dir: &Path, service: Option<&str>) -> Result<()> {
     preflight(data_dir)?;
 

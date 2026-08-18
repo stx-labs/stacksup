@@ -1,8 +1,8 @@
-//! `stacksup config check` — answers "why isn't my stack working?".
+//! `stacksup config check` answers "why isn't my stack working?".
 //!
-//! Config coherence is already enforced at load time (config::validate); this
-//! module checks the *live* side: can every consumer actually reach its
-//! producers, and are they on the chain we think they're on?
+//! Config coherence is already enforced at load time (config::validate); this module checks the
+//! *live* side: can every consumer actually reach its producers, and are they on the chain we think
+//! they're on?
 
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -57,10 +57,9 @@ pub fn run(deployment: &Deployment) -> Result<()> {
     }
 
     println!("\nconnectivity");
-    // External services are checked from the host at their configured port.
-    // Managed services are probed via 127.0.0.1 at their published (offset)
-    // port — reachable there whether the mapping binds loopback or all
-    // interfaces.
+    // External services are checked from the host at their configured port. Managed services are
+    // probed via 127.0.0.1 at their published (offset) port, reachable there whether the mapping
+    // binds loopback or all interfaces.
     let probe_port = |mode: ServiceMode, base: u16| match mode {
         ServiceMode::Enabled => deployment.published(base),
         _ => base,
@@ -107,10 +106,6 @@ pub fn run(deployment: &Deployment) -> Result<()> {
 
     println!("\nchain");
     check_node_info(&mut r, deployment);
-    // TODO(hackathon): the checks that catch the silent failure modes —
-    //  - bitcoind getblockchaininfo: chain matches stacks.toml network
-    //  - API /extended chain tip vs node /v2/info tip (event stream actually flowing)
-    //  - node /v3/health difference_from_max_peer (sync lag vs peers)
 
     if r.failures > 0 {
         println!();
@@ -120,8 +115,8 @@ pub fn run(deployment: &Deployment) -> Result<()> {
     Ok(())
 }
 
-/// Where to reach a service from the host: its configured host when external,
-/// localhost when enabled (published ports), None when disabled.
+/// Where to reach a service from the host: its configured host when external, localhost when
+/// enabled (published ports), None when disabled.
 fn external_or_local(mode: ServiceMode, host: Option<&str>) -> Option<String> {
     match mode {
         ServiceMode::Enabled => Some("127.0.0.1".into()),
@@ -174,7 +169,7 @@ fn check_node_info(r: &mut Report, deployment: &Deployment) {
             Err(e) => r.fail(&format!("stacks-node /v2/info: invalid response ({e})")),
         },
         Err(e) => r.fail(&format!(
-            "stacks-node /v2/info: {e} — node down or still booting?"
+            "stacks-node /v2/info: {e}. Node down or still booting?"
         )),
     }
 }

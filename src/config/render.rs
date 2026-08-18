@@ -4,8 +4,8 @@
 //!   <data-dir>/rendered/   compose file + per-service configs (regenerated)
 //!   <data-dir>/chainstate/ service state: chainstate, Postgres, signer db
 //!
-//! Service state is bind-mounted from `chainstate/` (not named Docker volumes) so the entire stack
-//! — configs and data — lives where the operator said.
+//! Service state is bind-mounted from `chainstate/` (not named Docker volumes) so the entire stack,
+//! configs and data, lives where the operator said.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -19,9 +19,9 @@ use crate::utils::services::*;
 
 pub use crate::config::DEFAULT_PROJECT;
 
-/// Docker networks, split so a compromised API-side container cannot reach
-/// the signer (or bitcoind) directly. Each service joins only the networks
-/// it needs; the node bridges all three because everything talks to it.
+/// Docker networks, split so a compromised API-side container cannot reach the signer (or bitcoind)
+/// directly. Each service joins only the networks it needs; the node bridges all three because
+/// everything talks to it.
 const NET_BITCOIN: &str = "bitcoin"; // bitcoind + node
 const NET_CORE: &str = "core"; // node + signer
 const NET_SERVICES: &str = "services"; // api + mesh + postgres (+ node for RPC/events)
@@ -50,9 +50,8 @@ const API_PG_SCHEMA: &str = "stacks_blockchain_api";
 
 #[derive(Serialize)]
 struct ComposeFile {
-    /// Compose project name, embedded so every `docker compose -f` invocation
-    /// (ours or the operator's) lands on this deployment's containers and
-    /// networks without a -p flag.
+    /// Compose project name, embedded so every `docker compose -f` invocation (ours or the
+    /// operator's) lands on this deployment's containers and networks without a -p flag.
     name: String,
     services: BTreeMap<String, ComposeService>,
     networks: BTreeMap<String, Option<()>>,
@@ -94,9 +93,8 @@ struct ComposeService {
 impl ComposeService {
     fn new(deployment: &Deployment, name: &str, image: &str) -> Self {
         let project = deployment.project();
-        // The default project keeps the historical names (stacks-* bare,
-        // generic ones prefixed). A named deployment prefixes everything —
-        // container names are a docker-wide namespace.
+        // The default project keeps the historical names (stacks-* bare, generic ones prefixed). A
+        // named deployment prefixes everything — container names are a docker-wide namespace.
         let container_name = if project == DEFAULT_PROJECT {
             if name.starts_with("stacks-") {
                 name.to_string()
@@ -112,8 +110,8 @@ impl ComposeService {
             restart: "unless-stopped".into(),
             // Every builder sets its own network membership (least access).
             networks: Vec::new(),
-            // Lets managed services reach "external" services running on the
-            // operator's localhost — a common setup that trips people up.
+            // Lets managed services reach "external" services running on the operator's localhost,
+            // a common setup that trips people up.
             extra_hosts: vec!["host.docker.internal:host-gateway".into()],
             ..Default::default()
         }
@@ -244,10 +242,9 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
         format!("-chain={}", deployment.net.bitcoind.chain),
         "-rpcbind=0.0.0.0".into(),
         "-rpcallowip=0.0.0.0/0".into(),
-        // A salted hash — unlike -rpcpassword, safe to expose via docker
-        // inspect. The plaintext lives in secrets.toml and the node's
-        // mounted Config.toml only. The `$` separating salt from digest must
-        // be `$$` in the compose file or interpolation swallows the digest.
+        // A salted hash, unlike -rpcpassword, safe to expose via docker inspect. The plaintext
+        // lives in secrets.toml and the node's mounted Config.toml only. The `$` separating salt
+        // from digest must be `$$` in the compose file or interpolation swallows the digest.
         format!(
             "-rpcauth={}",
             secrets::bitcoind_rpcauth(
@@ -261,12 +258,10 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
             .replace('$', "$$")
         ),
     ];
-    // Loopback-bind the RPC port: every container carries a
-    // host.docker.internal alias, so a 0.0.0.0 publish would let API-side
-    // containers reach bitcoind through the host, bypassing the network
-    // split. Operators still get bitcoin-cli on localhost. Only an external
-    // node (running off-host) needs the wide binding. P2P stays open — it
-    // exists to accept peers.
+    // Loopback-bind the RPC port: every container carries a host.docker.internal alias, so a
+    // 0.0.0.0 publish would let API-side containers reach bitcoind through the host, bypassing the
+    // network split. Operators still get bitcoin-cli on localhost. Only an external node (running
+    // off-host) needs the wide binding. P2P stays open, it exists to accept peers.
     let rpc_publish = if deployment.stacks_node.mode == ServiceMode::External {
         format!("{}:{rpc}", deployment.published(rpc))
     } else {
@@ -297,14 +292,13 @@ fn node_service(deployment: &Deployment) -> ComposeService {
     if deployment.bitcoind.mode == ServiceMode::Enabled {
         svc.depends_on.push("bitcoind".into());
     }
-    // The node pushes events to the API; if the API is down at boot the node
-    // retries, but starting after the API avoids stalling block processing.
+    // The node pushes events to the API; if the API is down at boot the node retries, but starting
+    // after the API avoids stalling block processing.
     if deployment.stacks_api.mode == ServiceMode::Enabled {
         svc.depends_on.push("stacks-api".into());
     }
-    // Always on `core` (its home even with no signer); `bitcoin` only with a
-    // managed bitcoind; `services` only when an API-side consumer needs its
-    // RPC or receives its event pushes.
+    // Always on `core` (its home even with no signer); `bitcoin` only with a managed bitcoind;
+    // `services` only when an API-side consumer needs its RPC or receives its event pushes.
     svc.networks = vec![NET_CORE.into()];
     if deployment.bitcoind.mode == ServiceMode::Enabled {
         svc.networks.insert(0, NET_BITCOIN.into());
@@ -369,8 +363,8 @@ fn mesh_api_service(deployment: &Deployment) -> ComposeService {
     svc
 }
 
-/// Postgres major from the configured version tag: "17" -> 17,
-/// "17.5-alpine" -> 17, "latest"/absent -> None.
+/// Postgres major from the configured version tag: "17" -> 17, "17.5-alpine" -> 17, "latest"/absent
+/// -> None.
 fn postgres_major(deployment: &Deployment) -> Option<u32> {
     deployment
         .postgres
@@ -397,8 +391,8 @@ fn postgres_service(deployment: &Deployment) -> ComposeService {
             .clone()
             .unwrap_or_else(|| "postgres".into()),
     );
-    // Password arrives via a compose secret file, not container env —
-    // `docker inspect` shows only the path.
+    // Password arrives via a compose secret file, not container env, `docker inspect` shows only
+    // the path.
     svc.environment.insert(
         "POSTGRES_PASSWORD_FILE".into(),
         "/run/secrets/pg_password".into(),
@@ -406,27 +400,25 @@ fn postgres_service(deployment: &Deployment) -> ComposeService {
     svc.secrets = vec!["pg_password".into()];
     svc.environment
         .insert("POSTGRES_DB".into(), API_PG_DATABASE.into());
-    // Postgres 18+ images keep data in a version-specific subdirectory and
-    // require the mount at /var/lib/postgresql (enabling pg_upgrade across
-    // majors); images <= 17 use PGDATA=/var/lib/postgresql/data and need the
-    // mount there. Unknown majors (e.g. `latest`) get the 18+ convention.
+    // Postgres 18+ images keep data in a version-specific subdirectory and require the mount at
+    // /var/lib/postgresql (enabling pg_upgrade across majors); images <= 17 use
+    // PGDATA=/var/lib/postgresql/data and need the mount there. Unknown majors (e.g. `latest`) get
+    // the 18+ convention.
     let data_target = match postgres_major(deployment) {
         Some(major) if major <= 17 => "/var/lib/postgresql/data",
         _ => "/var/lib/postgresql",
     };
     svc.volumes = vec![
         format!("../chainstate/postgres:{data_target}"),
-        // Read-only view of downloaded archives so pg_restore (which needs a
-        // seekable file, not stdin) can restore dumps fetched by
-        // `stacksup chainstate download`.
+        // Read-only view of downloaded archives so pg_restore (which needs a seekable file, not
+        // stdin) can restore dumps fetched by `stacksup chainstate download`.
         "../downloads:/downloads:ro".into(),
     ];
 
-    // Ensure the API's schema exists on EVERY boot, not just first init —
-    // /docker-entrypoint-initdb.d only runs on an empty data directory.
-    // The schema creator runs as a background job while postgres is exec'd
-    // as PID 1, so SIGTERM from `stacksup stop` reaches postgres directly and
-    // shutdown is clean (a backgrounded postgres under bash would be
+    // Ensure the API's schema exists on EVERY boot, not just first init,
+    // /docker-entrypoint-initdb.d only runs on an empty data directory. The schema creator runs as
+    // a background job while postgres is exec'd as PID 1, so SIGTERM from `stacksup stop` reaches
+    // postgres directly and shutdown is clean (a backgrounded postgres under bash would be
     // SIGKILLed after the grace period instead).
     let user = deployment
         .postgres
@@ -446,10 +438,9 @@ fn postgres_service(deployment: &Deployment) -> ComposeService {
     svc
 }
 
-/// The stacks-node Config.toml. Cross-service values (bitcoind endpoint, event
-/// observers, signer auth) are derived from the same `Deployment` the other configs
-/// come from — matched by construction. The testnet shape mirrors
-/// stacks-core's sample/conf/testnet-follower-conf.toml.
+/// The stacks-node Config.toml. Cross-service values (bitcoind endpoint, event observers, signer
+/// auth) are derived from the same `Deployment` the other configs come from, matched by
+/// construction. The testnet shape mirrors stacks-core's sample/conf/testnet-follower-conf.toml.
 fn node_config_toml(deployment: &Deployment) -> String {
     let net = &deployment.net;
     let mut out = String::new();
@@ -484,8 +475,8 @@ fn node_config_toml(deployment: &Deployment) -> String {
         "mode = \"{}\"\nchain = \"bitcoin\"\n",
         net.node.burnchain_mode
     ));
-    // Burnchain endpoint: managed/external bitcoind, else the network's
-    // hosted default (validation guarantees one of these exists for a node).
+    // Burnchain endpoint: managed/external bitcoind, else the network's hosted default (validation
+    // guarantees one of these exists for a node).
     if let Some(host) = bitcoind_host(deployment).or_else(|| net.bitcoind.default_host.clone()) {
         out.push_str(&format!("peer_host = \"{host}\"\n"));
         out.push_str(&format!(
@@ -493,9 +484,9 @@ fn node_config_toml(deployment: &Deployment) -> String {
             bitcoind_rpc_port(deployment),
             bitcoind_p2p_port(deployment)
         ));
-        // Credentials: our managed bitcoind always has them (tool defaults);
-        // an external one only when both are explicitly configured —
-        // validation rejects partial credentials, so no silent fallbacks.
+        // Credentials: our managed bitcoind always has them (tool defaults); an external one only
+        // when both are explicitly configured, validation rejects partial credentials, so no
+        // silent fallbacks.
         if deployment.bitcoind.mode == ServiceMode::Enabled {
             out.push_str(&format!(
                 "username = \"{}\"\npassword = \"{}\"\n",
@@ -578,12 +569,11 @@ stacks_private_key = "REPLACE_ME"
     )
 }
 
-/// The node's `connection_options.auth_token`, which the signer's
-/// `auth_password` must match. External nodes bring their own token
-/// (`[stacks-node] auth_token`); managed nodes use a tool-managed one.
-/// The auth token shared by node config, signer, and mesh env — a single
-/// deployment field, populated from secrets.toml (required by validation
-/// whenever something consumes it).
+/// The node's `connection_options.auth_token`, which the signer's `auth_password` must match.
+/// External nodes bring their own token (`[stacks-node] auth_token`); managed nodes use a
+/// tool-managed one. The auth token shared by node config, signer, and mesh env, a single
+/// deployment field, populated from secrets.toml (required by validation whenever something
+/// consumes it).
 fn node_auth_token(deployment: &Deployment) -> String {
     deployment
         .stacks_node
@@ -627,10 +617,9 @@ TESTNET_SBTC_FAUCET_ENABLED=false
     )
 }
 
-/// Env for the Stacks Mesh API (packages/api/src/env.ts is the schema of
-/// record). Online mode needs the node's RPC endpoint and — critically — the
-/// node's `connection_options.auth_token`, which this render guarantees
-/// matches by deriving both from the same source. Cache sizes/TTLs and
+/// Env for the Stacks Mesh API (packages/api/src/env.ts is the schema of record). Online mode needs
+/// the node's RPC endpoint and critically the node's `connection_options.auth_token`, which
+/// this render guarantees matches by deriving both from the same source. Cache sizes/TTLs and
 /// BLOCK_HASH_MODE are left to the service's own defaults.
 fn mesh_api_env(deployment: &Deployment) -> String {
     let node_host = node_rpc_host(deployment).unwrap_or_default();
@@ -649,8 +638,8 @@ STACKS_CORE_RPC_AUTH_TOKEN={auth_token}
     )
 }
 
-/// Config the user must apply to their *external* node so push edges
-/// (events to the API, signer wiring) actually close.
+/// Config the user must apply to their *external* node so push edges (events to the API, signer
+/// wiring) actually close.
 fn apply_to_your_node(deployment: &Deployment) -> Option<String> {
     let mut out = String::from(
         "# Add these blocks to your stacks-node config, then restart it.\n\
@@ -659,8 +648,6 @@ fn apply_to_your_node(deployment: &Deployment) -> Option<String> {
     let mut needed = false;
 
     if deployment.stacks_api.mode == ServiceMode::Enabled {
-        // TODO(hackathon): make the advertised host configurable; the external
-        // node must be able to reach the machine running this stack.
         out.push_str(&format!(
             "[[events_observer]]\nendpoint = \"<this-machine>:{API_EVENT_PORT}\"\nevents_keys = {API_EVENTS_KEYS}\n\n"
         ));
@@ -683,9 +670,9 @@ fn apply_to_your_node(deployment: &Deployment) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Parse and merge the same test secrets `load()` would pull from a
-    /// secrets.toml, so generators see a post-merge deployment. Managed
-    /// bitcoind gets credentials; external keeps whatever the toml set.
+    /// Parse and merge the same test secrets `load()` would pull from a secrets.toml, so generators
+    /// see a post-merge deployment. Managed bitcoind gets credentials; external keeps whatever the
+    /// toml set.
     fn deployment(toml_str: &str) -> Deployment {
         let mut d = crate::config::test_deployment(toml_str);
         d.postgres
