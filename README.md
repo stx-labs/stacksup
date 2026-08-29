@@ -83,6 +83,29 @@ off-host), so containers can't sidestep the split via
 `host.docker.internal`; the P2P port stays open on purpose — it exists to
 accept peers from anywhere.
 
+## Signer Sidekick
+
+Deployments with a signer can enable [Signer Sidekick](https://github.com/stx-labs/signer-sidekick),
+the PoX-5 operations dashboard that monitors registration, pool membership,
+rewards, and signer health against your node:
+
+```toml
+[signer-sidekick]
+mode = "enabled"
+manager_principal = "SP....signer-manager"  # your deployed PoX-5 signer-manager
+```
+
+stacksup wires it by construction: node RPC and (when managed) node/signer
+telemetry endpoints, the managed stacks-api as its indexed API (falling back
+to the network's Hiro API), the dashboard auth token from `secrets.toml`
+(`[signer-sidekick] auth_token`), and the release's manager/compatibility
+profiles fetched once per version. The dashboard publishes loopback-only on
+port 3997 (shifted by `port_offset`). Its database lives in the
+`<name>_sidekick-data` docker volume — `stacksup chainstate wipe
+signer-sidekick` removes it. The engine defaults to `observe`; set
+`engine_mode = "operator-run"` only after reading sidekick's operator docs
+(its gas wallet is created inside the dashboard, never in config files).
+
 ## Running multiple deployments
 
 One machine can host several stacks side by side. Give each deployment its

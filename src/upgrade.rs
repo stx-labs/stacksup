@@ -80,6 +80,16 @@ pub fn run(deployment: &Deployment, service: Option<&str>) -> Result<()> {
                 .is_some_and(has_explicit_tag),
         ),
         (
+            "signer-sidekick",
+            deployment.signer_sidekick.mode,
+            crate::utils::services::signer_sidekick_image(deployment),
+            deployment
+                .signer_sidekick
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
+        ),
+        (
             "postgres",
             deployment.postgres.mode,
             crate::utils::services::postgres_image(deployment),

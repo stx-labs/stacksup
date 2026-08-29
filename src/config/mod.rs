@@ -65,6 +65,8 @@ pub struct Deployment {
     pub stacks_api: StacksApi,
     #[serde(default, rename = "stacks-mesh-api")]
     pub stacks_mesh_api: StacksMeshApi,
+    #[serde(default, rename = "signer-sidekick")]
+    pub signer_sidekick: SignerSidekick,
     #[serde(default)]
     pub postgres: Postgres,
 }
@@ -159,6 +161,33 @@ pub struct StacksMeshApi {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// signer-sidekick (github.com/stx-labs/signer-sidekick): PoX-5 operations dashboard for the
+/// deployment's signer and pool. Optional; requires a node and a signer.
+pub struct SignerSidekick {
+    #[serde(default)]
+    pub mode: ServiceMode,
+    /// Docker image override: a repository that keeps using `version`/the default tag, or a full
+    /// ref with its own tag (mutually exclusive with `version`).
+    pub image: Option<String>,
+    /// Release version (e.g. "2.0.0"); becomes image tag v<version>.
+    pub version: Option<String>,
+    /// The deployed PoX-5 signer-manager contract this deployment's signer registers through
+    /// (SP....contract-name). Required when enabled.
+    pub manager_principal: Option<String>,
+    /// "observe" (default) or "operator-run" (sidekick signs reward calls with the gas wallet it
+    /// generates in its own Settings UI; enable deliberately).
+    pub engine_mode: Option<String>,
+    /// Indexed Stacks API. Defaults to the managed stacks-api when enabled, else the network's
+    /// Hiro API.
+    pub stacks_api_url: Option<String>,
+    /// SECRET: set in secrets.toml ([signer-sidekick] auth_token), never here.
+    pub auth_token: Option<String>,
+    /// SECRET: optional Hiro API key, set in secrets.toml ([signer-sidekick] stacks_api_key).
+    pub stacks_api_key: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Postgres {
     #[serde(default)]
     pub mode: ServiceMode,
@@ -182,6 +211,24 @@ pub const DEFAULT_PROJECT: &str = "stacks";
 
 fn default_deployment_name() -> String {
     DEFAULT_PROJECT.into()
+}
+
+/// `ADDRESS.contract-name`: a c32 Stacks address (starts with S, uppercase alphanumerics) plus a
+/// lowercase contract name.
+fn is_contract_principal(p: &str) -> bool {
+    let Some((addr, name)) = p.split_once('.') else {
+        return false;
+    };
+    (28..=41).contains(&addr.len())
+        && addr.starts_with('S')
+        && addr
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && !name.is_empty()
+        && name.len() <= 40
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 impl Deployment {
@@ -218,6 +265,12 @@ impl Deployment {
         if self.stacks_node.auth_token.is_some() {
             leaks.push(("stacks-node", "auth_token"));
         }
+        if self.signer_sidekick.auth_token.is_some() {
+            leaks.push(("signer-sidekick", "auth_token"));
+        }
+        if self.signer_sidekick.stacks_api_key.is_some() {
+            leaks.push(("signer-sidekick", "stacks_api_key"));
+        }
         leaks
     }
 
@@ -227,6 +280,8 @@ impl Deployment {
         self.bitcoind.rpc_password = overlay.bitcoind.rpc_password;
         self.postgres.password = overlay.postgres.password;
         self.stacks_node.auth_token = overlay.stacks_node.auth_token;
+        self.signer_sidekick.auth_token = overlay.signer_sidekick.auth_token;
+        self.signer_sidekick.stacks_api_key = overlay.signer_sidekick.stacks_api_key;
     }
 
     /// Secrets that MUST be present given the enabled services. The tool never writes secrets.toml
@@ -250,6 +305,11 @@ impl Deployment {
                     || self.stacks_mesh_api.mode == ServiceMode::Enabled));
         if node_needs_token && self.stacks_node.auth_token.is_none() {
             missing.push(("stacks-node", "auth_token"));
+        }
+        if self.signer_sidekick.mode == ServiceMode::Enabled
+            && self.signer_sidekick.auth_token.is_none()
+        {
+            missing.push(("signer-sidekick", "auth_token"));
         }
         if !missing.is_empty() {
             return Err(crate::utils::secrets::missing_secrets_error(
@@ -406,6 +466,53 @@ impl Deployment {
             }
         }
 
+        // signer-sidekick monitors THIS deployment's signer through the node RPC and a deployed
+        // signer-manager contract; both ends must exist and the manager must be named.
+        match self.signer_sidekick.mode {
+            ServiceMode::External => errors.push(
+                "[signer-sidekick] mode = \"external\" is not supported — run it here (\"enabled\") or disable it"
+                    .into(),
+            ),
+            ServiceMode::Enabled => {
+                if self.stacks_node.mode == ServiceMode::Disabled {
+                    errors.push(
+                        "[signer-sidekick] requires a stacks-node; set [stacks-node] mode = \"enabled\" or \"external\""
+                            .into(),
+                    );
+                }
+                if self.stacks_signer.mode == ServiceMode::Disabled {
+                    errors.push(
+                        "[signer-sidekick] monitors this deployment's signer; set [stacks-signer] mode = \"enabled\" or \"external\""
+                            .into(),
+                    );
+                }
+                match self.signer_sidekick.manager_principal.as_deref() {
+                    None => errors.push(
+                        "[signer-sidekick] requires manager_principal — the deployed PoX-5 signer-manager contract (e.g. SP2ABC....signer-manager)"
+                            .into(),
+                    ),
+                    Some(p) if !is_contract_principal(p) => errors.push(format!(
+                        "[signer-sidekick] manager_principal `{p}` is not a contract principal (expected ADDRESS.contract-name)"
+                    )),
+                    _ => {}
+                }
+                if let Some(mode) = self.signer_sidekick.engine_mode.as_deref()
+                    && !matches!(mode, "observe" | "operator-run")
+                {
+                    errors.push(format!(
+                        "[signer-sidekick] engine_mode `{mode}` is invalid: \"observe\" or \"operator-run\""
+                    ));
+                }
+                if self.net.sidekick_network.is_none() {
+                    errors.push(format!(
+                        "network `{}` has no signer-sidekick profile (its definition lacks `sidekick_network`)",
+                        self.network
+                    ));
+                }
+            }
+            ServiceMode::Disabled => {}
+        }
+
         // Reversed (push) edges: the node's config must name its observers. When the node is
         // external we can't write that config, only emit it.
         if self.stacks_node.mode == ServiceMode::External
@@ -540,6 +647,14 @@ mode = "enabled"
 
 [stacks-mesh-api]
 mode = "disabled"
+
+# PoX-5 operations dashboard for this deployment's signer and pool
+# (github.com/stx-labs/signer-sidekick). Requires a node and a signer.
+[signer-sidekick]
+mode = "disabled"
+# manager_principal = "SP....signer-manager"  # your deployed PoX-5 signer-manager (required)
+# engine_mode = "observe"                     # or "operator-run" (deliberate opt-in)
+# The dashboard auth token goes in secrets.toml ([signer-sidekick] auth_token).
 
 [postgres]
 mode = "enabled"
@@ -706,6 +821,56 @@ mod tests {
         assert!(
             errors("name = \"testnet-b\"\nport_offset = 100\nnetwork = \"testnet\"").is_empty()
         );
+    }
+
+    #[test]
+    fn sidekick_requires_signer_node_and_manager() {
+        let base = "network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"";
+        let e = errors(base);
+        assert!(
+            e.iter().any(|m| m.contains("requires a stacks-node")),
+            "got: {e:?}"
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.contains("monitors this deployment's signer"))
+        );
+        assert!(e.iter().any(|m| m.contains("requires manager_principal")));
+
+        let bad_principal = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"not-a-principal\"";
+        assert!(
+            errors(bad_principal)
+                .iter()
+                .any(|m| m.contains("not a contract principal"))
+        );
+
+        let bad_engine = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"\nengine_mode = \"autopilot\"";
+        assert!(errors(bad_engine).iter().any(|m| m.contains("engine_mode")));
+
+        let external = "network = \"testnet\"\n[signer-sidekick]\nmode = \"external\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
+        assert!(errors(external).iter().any(|m| m.contains("not supported")));
+
+        let ok = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
+        assert!(errors(ok).is_empty(), "got: {:?}", errors(ok));
+    }
+
+    #[test]
+    fn sidekick_auth_token_is_required_and_leak_checked() {
+        let d = deployment(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"",
+        );
+        let err = d
+            .check_required_secrets(Path::new("."))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("[signer-sidekick]\nauth_token"), "got: {err}");
+
+        let mut leaky = deployment("network = \"testnet\"");
+        leaky.signer_sidekick.auth_token = Some("x".into());
+        leaky.signer_sidekick.stacks_api_key = Some("y".into());
+        let leaks = leaky.config_secret_leaks();
+        assert!(leaks.contains(&("signer-sidekick", "auth_token")));
+        assert!(leaks.contains(&("signer-sidekick", "stacks_api_key")));
     }
 
     #[test]

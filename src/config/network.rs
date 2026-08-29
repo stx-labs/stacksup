@@ -24,6 +24,12 @@ pub struct NetworkDef {
     pub chain_id: u32,
     /// Path segment under archive.hiro.so; absent when no Hiro archives exist for this network.
     pub hiro_archive_path: Option<String>,
+    /// The network name signer-sidekick expects in SIDEKICK_NETWORK (e.g. testnet is
+    /// "pox5-testnet" there); absent when sidekick has no profile for this network.
+    pub sidekick_network: Option<String>,
+    /// Hiro-hosted indexed Stacks API for this network; the sidekick default when no local
+    /// stacks-api is enabled and no explicit URL is configured.
+    pub hiro_api_url: Option<String>,
     pub bitcoind: BitcoindNet,
     pub node: NodeNet,
     #[serde(default, rename = "ustx_balance")]
