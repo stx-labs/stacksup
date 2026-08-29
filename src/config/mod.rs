@@ -215,17 +215,18 @@ fn default_deployment_name() -> String {
     DEFAULT_PROJECT.into()
 }
 
-/// `ADDRESS.contract-name`: a c32 Stacks address (starts with S, uppercase alphanumerics) plus a
-/// lowercase contract name.
+/// `ADDRESS.contract-name`: a c32 Stacks address (starts with S, c32 alphabet — no I/L/O/U) plus
+/// a lowercase contract name. Shape and alphabet only: full checksum verification is delegated to
+/// sidekick's own `connection check` / `manager verify`, which validate the principal against the
+/// chain — strictly stronger than a checksum.
 fn is_contract_principal(p: &str) -> bool {
+    const C32_ALPHABET: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     let Some((addr, name)) = p.split_once('.') else {
         return false;
     };
     (28..=41).contains(&addr.len())
         && addr.starts_with('S')
-        && addr
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && addr.chars().all(|c| C32_ALPHABET.contains(c))
         && !name.is_empty()
         && name.len() <= 40
         && name
@@ -397,6 +398,11 @@ impl Deployment {
                 &self.stacks_mesh_api.image,
                 &self.stacks_mesh_api.version,
             ),
+            (
+                "signer-sidekick",
+                &self.signer_sidekick.image,
+                &self.signer_sidekick.version,
+            ),
             ("postgres", &self.postgres.image, &self.postgres.version),
         ] {
             if let (Some(image), Some(_)) = (image, version)
@@ -508,6 +514,15 @@ impl Deployment {
                 {
                     errors.push(format!(
                         "[signer-sidekick] engine_mode `{mode}` is invalid: \"observe\" or \"operator-run\""
+                    ));
+                }
+                // An explicit URL must actually be one — an empty value would silently render
+                // STACKS_API_URL= and suppress the managed-API default.
+                if let Some(url) = self.signer_sidekick.stacks_api_url.as_deref()
+                    && !(url.starts_with("http://") || url.starts_with("https://"))
+                {
+                    errors.push(format!(
+                        "[signer-sidekick] stacks_api_url `{url}` must be an http(s) URL (or be removed to use the default)"
                     ));
                 }
                 // Sidekick needs an indexed API from somewhere: the managed one, an explicit
@@ -875,6 +890,31 @@ mod tests {
 
         let ok = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
         assert!(errors(ok).is_empty(), "got: {:?}", errors(ok));
+    }
+
+    #[test]
+    fn sidekick_review_validations() {
+        // image with explicit tag + version -> rejected like every other service
+        let both = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nimage = \"myorg/sidekick:v9\"\nversion = \"2.0.0\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
+        assert!(
+            errors(both)
+                .iter()
+                .any(|m| m.contains("already pins a tag"))
+        );
+        // empty explicit stacks_api_url -> rejected instead of rendering STACKS_API_URL=
+        let empty_url = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nstacks_api_url = \"\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
+        assert!(
+            errors(empty_url)
+                .iter()
+                .any(|m| m.contains("must be an http(s) URL"))
+        );
+        // c32 alphabet: I, L, O, U never appear in a Stacks address
+        assert!(!is_contract_principal(
+            "SPILOU00000000000000000002Q6VF78.signer-manager"
+        ));
+        assert!(is_contract_principal(
+            "SP000000000000000000002Q6VF78.signer-manager"
+        ));
     }
 
     #[test]

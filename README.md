@@ -98,14 +98,23 @@ mode = "enabled"
 manager_principal = "SP....signer-manager"  # your deployed PoX-5 signer-manager
 ```
 
+Sidekick's database lives under `chainstate/signer-sidekick/` like every
+other service's state (the container runs as the directory's owner, so the
+image's non-root user can write the bind mount). For an online backup while
+sidekick is running — especially before relying on an operator-run gas
+wallet — use its own tooling:
+
+```bash
+docker compose -f rendered/docker-compose.yml run --rm --no-deps signer-sidekick database backup /data/backup.sqlite
+```
+
 stacksup wires it by construction: node RPC and (when managed) node/signer
 telemetry endpoints, the managed stacks-api as its indexed API (falling back
 to the network's Hiro API), the dashboard auth token from `secrets.toml`
 (`[signer-sidekick] auth_token`), and the release's manager/compatibility
 profiles fetched once per version. The dashboard publishes loopback-only on
-port 3997 (shifted by `port_offset`). Its database lives in the
-`<name>_sidekick-data` docker volume — `stacksup chainstate wipe
-signer-sidekick` removes it. The engine defaults to `observe`; set
+port 3997 (shifted by `port_offset`); `stacksup chainstate wipe
+signer-sidekick` wipes its database. The engine defaults to `observe`; set
 `engine_mode = "operator-run"` only after reading sidekick's operator docs
 (its gas wallet is created inside the dashboard, never in config files).
 

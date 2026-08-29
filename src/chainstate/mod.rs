@@ -283,63 +283,7 @@ const CHAINSTATE_SERVICES: &[(&str, &[&str])] = &[
     ("postgres", &["postgres", "stacks-api"]),
 ];
 
-/// Sidekick's state lives in a named docker volume (its container runs as a non-root user that
-/// couldn't write a bind mount), so wiping it is `docker volume rm`, not a directory delete.
-/// The volume is `<project>_sidekick-data`; the project is embedded in the rendered compose file.
-fn sidekick_volume(data_dir: &Path) -> Option<String> {
-    let compose = std::fs::read_to_string(crate::config::render::compose_file(data_dir)).ok()?;
-    let yaml: serde_yaml::Value = serde_yaml::from_str(&compose).ok()?;
-    yaml["volumes"].get("sidekick-data")?;
-    Some(format!("{}_sidekick-data", yaml["name"].as_str()?))
-}
-
-fn wipe_sidekick_volume(data_dir: &Path, yes: bool) -> Result<()> {
-    let Some(volume) = sidekick_volume(data_dir) else {
-        println!("Nothing to wipe: no sidekick-data volume in the rendered compose file.");
-        return Ok(());
-    };
-    if let Some(running) = crate::utils::docker::running_services(data_dir)
-        && running.iter().any(|s| s == "signer-sidekick")
-    {
-        bail!(
-            "signer-sidekick is still running, stop it first with `stacksup stop signer-sidekick`"
-        );
-    }
-    println!(
-        "{}",
-        format!("This will permanently delete the docker volume {volume} (sidekick database)")
-            .yellow()
-    );
-    println!("{}", "THIS CANNOT BE UNDONE.".red().bold());
-    if !yes {
-        print!("Type 'yes' to delete, anything else to abort: ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if input.trim() != "yes" {
-            println!("Aborted, nothing was deleted.");
-            return Ok(());
-        }
-    }
-    let out = std::process::Command::new("docker")
-        .args(["volume", "rm", &volume])
-        .output()?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        if err.contains("no such volume") {
-            println!("Volume {volume} does not exist, nothing to wipe.");
-            return Ok(());
-        }
-        bail!("docker volume rm {volume} failed: {}", err.trim());
-    }
-    println!("Deleted volume {volume}");
-    Ok(())
-}
-
 pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
-    if service == Some("signer-sidekick") {
-        return wipe_sidekick_volume(data_dir, yes);
-    }
     let affected: &[&str] = match service {
         Some(name) => match CHAINSTATE_SERVICES.iter().find(|(n, _)| *n == name) {
             Some((_, users)) => users,
@@ -396,14 +340,6 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
             format!("  contents: {}", contents.join(", ")).yellow()
         );
     }
-    if service.is_none()
-        && let Some(volume) = sidekick_volume(data_dir)
-    {
-        println!(
-            "{}",
-            format!("  also deletes the docker volume {volume} (sidekick database)").yellow()
-        );
-    }
     println!(
         "{}",
         "Synced chainstate can take days to rebuild. THIS CANNOT BE UNDONE."
@@ -425,17 +361,6 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
     std::fs::remove_dir_all(&dir).with_context(|| format!("failed to delete {}", dir.display()))?;
     println!("Deleted {}", dir.display());
 
-    // A full wipe also drops sidekick's named volume (its state lives there, not on disk here).
-    if service.is_none()
-        && let Some(volume) = sidekick_volume(data_dir)
-    {
-        let out = std::process::Command::new("docker")
-            .args(["volume", "rm", &volume])
-            .output()?;
-        if out.status.success() {
-            println!("Deleted volume {volume}");
-        }
-    }
     Ok(())
 }
 

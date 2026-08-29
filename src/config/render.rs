@@ -56,8 +56,6 @@ struct ComposeFile {
     services: BTreeMap<String, ComposeService>,
     networks: BTreeMap<String, Option<()>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    volumes: BTreeMap<String, Option<()>>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     secrets: BTreeMap<String, ComposeSecret>,
 }
 
@@ -90,6 +88,9 @@ struct ComposeService {
     secrets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     extra_hosts: Vec<String>,
+    /// Container user override ("uid:gid"): lets a non-root image write our bind mounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
     // Hardening knobs (used by services whose upstream compose ships them).
     #[serde(skip_serializing_if = "Option::is_none")]
     init: Option<bool>,
@@ -139,7 +140,6 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
         name: deployment.project().to_string(),
         services: BTreeMap::new(),
         networks: BTreeMap::new(),
-        volumes: BTreeMap::new(),
         secrets: BTreeMap::new(),
     };
 
@@ -207,6 +207,7 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     }
 
     if deployment.signer_sidekick.mode == ServiceMode::Enabled {
+        chainstate_subdir("signer-sidekick")?;
         std::fs::create_dir_all(dir.join("signer-sidekick"))?;
         // Carries the dashboard auth token (and optionally a Hiro API key) -> 0600.
         secrets::write_0600(
@@ -214,13 +215,14 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
             &format!("{GENERATED_HEADER}{}", sidekick_env(deployment)),
         )?;
         ensure_sidekick_profiles(deployment, data_dir, &dir.join("signer-sidekick"))?;
-        // Sidekick runs as a non-root user (uid 10001), so its sqlite lives in a named volume
-        // (auto-chowned by docker) instead of a chainstate/ bind mount, which the container
-        // user could not write on Linux.
-        compose.volumes.insert("sidekick-data".into(), None);
-        compose
-            .services
-            .insert("signer-sidekick".into(), sidekick_service(deployment));
+        // The image bakes in a non-root user (uid 10001) with no root entrypoint to chown a
+        // mount, so the service runs as the OWNER of the chainstate dir instead — that keeps
+        // its sqlite inside --data-dir like every other service's state (back up one unit).
+        let owner = std::fs::metadata(data_dir.join("chainstate/signer-sidekick"))?;
+        compose.services.insert(
+            "signer-sidekick".into(),
+            sidekick_service(deployment, &owner),
+        );
     }
 
     if deployment.postgres.mode == ServiceMode::Enabled {
@@ -695,7 +697,13 @@ fn sidekick_env(deployment: &Deployment) -> String {
          SIDEKICK_ENGINE_MODE={engine}\n\
          SIDEKICK_TRUSTED_MANAGER_PROFILES_DIR=/etc/sidekick/trusted-managers\n\
          SIDEKICK_COMPATIBILITY_PROFILES_DIR=/etc/sidekick/network-compatibility\n",
-        network = deployment.network,
+        // The chain was promoted to be THE testnet, but sidekick's config still rejects the
+        // plain name and wants its legacy selector (config.ts maps pox5-testnet -> testnet
+        // internally). Delete this translation once sidekick accepts "testnet".
+        network = match deployment.network.as_str() {
+            "testnet" => "pox5-testnet",
+            other => other,
+        },
         node_host = node_rpc_host(deployment).unwrap_or_default(),
         node_rpc = node_rpc_port(deployment),
         api_url = sidekick_api_url(deployment),
@@ -732,12 +740,15 @@ fn sidekick_api_url(deployment: &Deployment) -> String {
     deployment.net.hiro_api_url.clone().unwrap_or_default()
 }
 
-fn sidekick_service(deployment: &Deployment) -> ComposeService {
+fn sidekick_service(deployment: &Deployment, data_owner: &std::fs::Metadata) -> ComposeService {
+    use std::os::unix::fs::MetadataExt;
     let mut svc = ComposeService::new(
         deployment,
         "signer-sidekick",
         &signer_sidekick_image(deployment),
     );
+    // Run as the chainstate dir's owner so the bind mount is writable by construction.
+    svc.user = Some(format!("{}:{}", data_owner.uid(), data_owner.gid()));
     svc.env_file = vec!["./signer-sidekick/.env".into()];
     // Dashboard only; bearer-token login is the only auth, so loopback-only. The event listener
     // (3700) stays container-internal.
@@ -746,7 +757,7 @@ fn sidekick_service(deployment: &Deployment) -> ComposeService {
         deployment.published(SIDEKICK_PORT)
     )];
     svc.volumes = vec![
-        "sidekick-data:/data".into(),
+        "../chainstate/signer-sidekick:/data".into(),
         "./signer-sidekick/trusted-managers:/etc/sidekick/trusted-managers:ro".into(),
         "./signer-sidekick/network-compatibility:/etc/sidekick/network-compatibility:ro".into(),
     ];
@@ -1082,8 +1093,8 @@ mod tests {
     fn sidekick_env_wires_node_api_and_telemetry() {
         let d = sidekick_deployment();
         let env = sidekick_env(&d);
-        // sidekick accepts the plain network name ("pox5-testnet" is only an alias upstream)
-        assert!(env.contains("SIDEKICK_NETWORK=testnet"), "got: {env}");
+        // sidekick still requires its legacy selector for the promoted testnet
+        assert!(env.contains("SIDEKICK_NETWORK=pox5-testnet"), "got: {env}");
         assert!(env.contains("STACKS_NODE_RPC_URL=http://stacks-node:20443"));
         // managed stacks-api is the indexed API by default
         assert!(env.contains("STACKS_API_URL=http://stacks-api:3999"));
@@ -1110,20 +1121,32 @@ mod tests {
 
     #[test]
     fn sidekick_service_hardening_networks_and_ports() {
+        let meta = std::fs::metadata(std::env::temp_dir()).unwrap();
         let d = sidekick_deployment();
-        let svc = sidekick_service(&d);
+        let svc = sidekick_service(&d, &meta);
         // loopback dashboard on 3997 host-side; container keeps 3998
         assert_eq!(svc.ports, vec!["127.0.0.1:3997:3998"]);
         // core (node+signer) plus services (managed API is its indexed API)
         assert_eq!(svc.networks, vec!["core", "services"]);
         assert!(svc.read_only);
         assert_eq!(svc.cap_drop, vec!["ALL"]);
-        assert!(svc.volumes.iter().any(|v| v == "sidekick-data:/data"));
+        // state is a data-dir bind mount, writable because the service runs
+        // as the chainstate dir's owner
+        assert!(
+            svc.volumes
+                .iter()
+                .any(|v| v == "../chainstate/signer-sidekick:/data")
+        );
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            svc.user.as_deref(),
+            Some(format!("{}:{}", meta.uid(), meta.gid()).as_str())
+        );
 
         // explicit external API URL -> no services membership
         let mut d = sidekick_deployment();
         d.signer_sidekick.stacks_api_url = Some("https://api.example.com".into());
-        assert_eq!(sidekick_service(&d).networks, vec!["core"]);
+        assert_eq!(sidekick_service(&d, &meta).networks, vec!["core"]);
     }
 
     #[test]
@@ -1163,7 +1186,7 @@ mod tests {
                 .unwrap()
                 .contains_key("signer-sidekick")
         );
-        assert!(compose["volumes"].get("sidekick-data").is_some());
+        assert!(dir.join("chainstate/signer-sidekick").is_dir());
         // user-provided profiles untouched
         assert!(
             dir.join("rendered/signer-sidekick/trusted-managers/mine.json")
