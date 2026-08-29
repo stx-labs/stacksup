@@ -695,11 +695,7 @@ fn sidekick_env(deployment: &Deployment) -> String {
          SIDEKICK_ENGINE_MODE={engine}\n\
          SIDEKICK_TRUSTED_MANAGER_PROFILES_DIR=/etc/sidekick/trusted-managers\n\
          SIDEKICK_COMPATIBILITY_PROFILES_DIR=/etc/sidekick/network-compatibility\n",
-        network = deployment
-            .net
-            .sidekick_network
-            .as_deref()
-            .unwrap_or_default(),
+        network = deployment.network,
         node_host = node_rpc_host(deployment).unwrap_or_default(),
         node_rpc = node_rpc_port(deployment),
         api_url = sidekick_api_url(deployment),
@@ -1086,8 +1082,8 @@ mod tests {
     fn sidekick_env_wires_node_api_and_telemetry() {
         let d = sidekick_deployment();
         let env = sidekick_env(&d);
-        // testnet is "pox5-testnet" in sidekick's vocabulary
-        assert!(env.contains("SIDEKICK_NETWORK=pox5-testnet"), "got: {env}");
+        // sidekick accepts the plain network name ("pox5-testnet" is only an alias upstream)
+        assert!(env.contains("SIDEKICK_NETWORK=testnet"), "got: {env}");
         assert!(env.contains("STACKS_NODE_RPC_URL=http://stacks-node:20443"));
         // managed stacks-api is the indexed API by default
         assert!(env.contains("STACKS_API_URL=http://stacks-api:3999"));
@@ -1106,7 +1102,7 @@ mod tests {
         );
         d.signer_sidekick.auth_token = Some("test-sidekick-token".into());
         assert!(
-            sidekick_env(&d).contains("STACKS_API_URL=https://api.testnet-pox5.hiro.so"),
+            sidekick_env(&d).contains("STACKS_API_URL=https://api.testnet.hiro.so"),
             "got: {}",
             sidekick_env(&d)
         );

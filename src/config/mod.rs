@@ -161,8 +161,10 @@ pub struct StacksMeshApi {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-/// signer-sidekick (github.com/stx-labs/signer-sidekick): PoX-5 operations dashboard for the
-/// deployment's signer and pool. Optional; requires a node and a signer.
+/// signer-sidekick (github.com/stx-labs/signer-sidekick): PoX-5 operations dashboard for a
+/// signer and its pool. Optional; requires a node. A signer in this deployment is recommended
+/// (direct Signer Health telemetry) but not required — sidekick can monitor any deployed,
+/// compatible signer-manager read-only.
 pub struct SignerSidekick {
     #[serde(default)]
     pub mode: ServiceMode,
@@ -480,9 +482,14 @@ impl Deployment {
                             .into(),
                     );
                 }
+                // A signer is recommended, not required: sidekick can monitor any deployed
+                // manager read-only; without a signer its Signer Health page just lacks the
+                // direct process telemetry.
                 if self.stacks_signer.mode == ServiceMode::Disabled {
-                    errors.push(
-                        "[signer-sidekick] monitors this deployment's signer; set [stacks-signer] mode = \"enabled\" or \"external\""
+                    warnings.push(
+                        "signer-sidekick is enabled without a signer in this deployment — pool and \
+                         manager monitoring work, but the Signer Health page will have no direct \
+                         signer telemetry"
                             .into(),
                     );
                 }
@@ -503,9 +510,15 @@ impl Deployment {
                         "[signer-sidekick] engine_mode `{mode}` is invalid: \"observe\" or \"operator-run\""
                     ));
                 }
-                if self.net.sidekick_network.is_none() {
+                // Sidekick needs an indexed API from somewhere: the managed one, an explicit
+                // URL, or the network's Hiro API.
+                if self.stacks_api.mode != ServiceMode::Enabled
+                    && self.signer_sidekick.stacks_api_url.is_none()
+                    && self.net.hiro_api_url.is_none()
+                {
                     errors.push(format!(
-                        "network `{}` has no signer-sidekick profile (its definition lacks `sidekick_network`)",
+                        "[signer-sidekick] needs an indexed Stacks API: enable [stacks-api], set \
+                         stacks_api_url, or add `hiro_api_url` to the `{}` network definition",
                         self.network
                     ));
                 }
@@ -648,8 +661,9 @@ mode = "enabled"
 [stacks-mesh-api]
 mode = "disabled"
 
-# PoX-5 operations dashboard for this deployment's signer and pool
-# (github.com/stx-labs/signer-sidekick). Requires a node and a signer.
+# PoX-5 operations dashboard for a signer and its pool
+# (github.com/stx-labs/signer-sidekick). Requires a node; a signer in this
+# deployment is recommended but not required (monitor-only works).
 [signer-sidekick]
 mode = "disabled"
 # manager_principal = "SP....signer-manager"  # your deployed PoX-5 signer-manager (required)
@@ -831,11 +845,20 @@ mod tests {
             e.iter().any(|m| m.contains("requires a stacks-node")),
             "got: {e:?}"
         );
-        assert!(
-            e.iter()
-                .any(|m| m.contains("monitors this deployment's signer"))
-        );
         assert!(e.iter().any(|m| m.contains("requires manager_principal")));
+        // a signer is recommended, not required: monitor-only deployments are valid
+        assert!(!e.iter().any(|m| m.contains("signer-sidekick] monitors")));
+        let monitor_only = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
+        assert!(
+            errors(monitor_only).is_empty(),
+            "got: {:?}",
+            errors(monitor_only)
+        );
+        assert!(
+            warnings(monitor_only)
+                .iter()
+                .any(|m| m.contains("Signer Health"))
+        );
 
         let bad_principal = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"not-a-principal\"";
         assert!(

@@ -25,7 +25,7 @@ struct Tip {
 ///
 /// Works whether the stack is running or stopped, with different coverage: the node's tips are read
 /// straight from its sqlite files (safe read-only even while the node writes), while the API's tip
-/// lives in Postgres and bitcoind's in LevelDB — those two are only checkable while running.
+/// lives in Postgres and bitcoind's in LevelDB, those two are only checkable while running.
 pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     let running = crate::utils::docker::running_services(data_dir).unwrap_or_default();
     let mut tips: Vec<Tip> = Vec::new();
@@ -44,7 +44,7 @@ pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     }
 
     if tips.is_empty() {
-        bail!("no enabled services hold chainstate — nothing to check");
+        bail!("no enabled services hold chainstate, nothing to check");
     }
 
     println!(
@@ -89,7 +89,7 @@ pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
             let warning = format!(
                 "⚠ stacks-node ({node}) is BEHIND stacks-api ({api}).\n  \
                  This is recoverable: as the node syncs it will reach height {api} and\n  \
-                 the API will follow along normally from there. No action needed —\n  \
+                 the API will follow along normally from there. No action needed,\n  \
                  let the node catch up."
             );
             println!("{}", warning.yellow());
@@ -107,7 +107,7 @@ pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
             bail!("chainstate is inconsistent");
         }
         _ => {
-            println!("Not enough readable tips to compare — need both the stacks-node and");
+            println!("Not enough readable tips to compare, need both the stacks-node and");
             println!("stacks-api heights (start the stack for full coverage).");
         }
     }
@@ -135,7 +135,7 @@ fn node_tip(deployment: &Deployment, data_dir: &Path) -> Tip {
     };
     if !sort_db.exists() {
         tip.note = Some(format!(
-            "no sortition db at {} — has the node run yet?",
+            "no sortition db at {}, has the node run yet?",
             sort_db.display()
         ));
         return tip;
@@ -190,7 +190,7 @@ fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
     };
     if !running {
         tip.note =
-            Some("bitcoind is not running — height in LevelDB is not readable offline".into());
+            Some("bitcoind is not running, height in LevelDB is not readable offline".into());
         return tip;
     }
     let chain = deployment.net.bitcoind.chain.as_str();
@@ -231,11 +231,11 @@ fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
         note: None,
     };
     if deployment.postgres.mode != ServiceMode::Enabled {
-        tip.note = Some("API uses an external/disabled postgres — not checked by this tool".into());
+        tip.note = Some("API uses an external/disabled postgres, not checked by this tool".into());
         return tip;
     }
     if !postgres_running {
-        tip.note = Some("postgres is not running — `stacksup start` to check the API's tip".into());
+        tip.note = Some("postgres is not running, `stacksup start` to check the API's tip".into());
         return tip;
     }
     let user = deployment.postgres.user.as_deref().unwrap_or("postgres");
@@ -259,7 +259,7 @@ fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
             tip.stacks = parts.next().and_then(|s| s.trim().parse().ok());
             tip.bitcoin = parts.next().and_then(|s| s.trim().parse().ok());
             if tip.stacks.is_none() {
-                tip.note = Some("chain_tip is empty — the API hasn't indexed a block yet".into());
+                tip.note = Some("chain_tip is empty, the API hasn't indexed a block yet".into());
             }
         }
         Ok(o) => {
@@ -302,7 +302,7 @@ fn wipe_sidekick_volume(data_dir: &Path, yes: bool) -> Result<()> {
         && running.iter().any(|s| s == "signer-sidekick")
     {
         bail!(
-            "signer-sidekick is still running — stop it first with `stacksup stop signer-sidekick`"
+            "signer-sidekick is still running, stop it first with `stacksup stop signer-sidekick`"
         );
     }
     println!(
@@ -317,7 +317,7 @@ fn wipe_sidekick_volume(data_dir: &Path, yes: bool) -> Result<()> {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         if input.trim() != "yes" {
-            println!("Aborted — nothing was deleted.");
+            println!("Aborted, nothing was deleted.");
             return Ok(());
         }
     }
@@ -327,7 +327,7 @@ fn wipe_sidekick_volume(data_dir: &Path, yes: bool) -> Result<()> {
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         if err.contains("no such volume") {
-            println!("Volume {volume} does not exist — nothing to wipe.");
+            println!("Volume {volume} does not exist, nothing to wipe.");
             return Ok(());
         }
         bail!("docker volume rm {volume} failed: {}", err.trim());
@@ -344,7 +344,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
         Some(name) => match CHAINSTATE_SERVICES.iter().find(|(n, _)| *n == name) {
             Some((_, users)) => users,
             None => bail!(
-                "`{name}` has no on-disk chainstate — services with state: {}",
+                "`{name}` has no on-disk chainstate, services with state: {}",
                 CHAINSTATE_SERVICES
                     .iter()
                     .map(|(n, _)| *n)
@@ -371,7 +371,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
             .collect();
         if !blocking.is_empty() {
             bail!(
-                "still running ({}) — stop them first with `stacksup stop [service]`",
+                "still running ({}), stop them first with `stacksup stop [service]`",
                 blocking
                     .iter()
                     .map(|s| s.as_str())
@@ -417,7 +417,7 @@ pub fn wipe(data_dir: &Path, service: Option<&str>, yes: bool) -> Result<()> {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         if input.trim() != "yes" {
-            println!("Aborted — nothing was deleted.");
+            println!("Aborted, nothing was deleted.");
             return Ok(());
         }
     }

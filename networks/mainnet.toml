@@ -3,7 +3,6 @@
 
 name = "mainnet"
 chain_id = 0x00000001
-sidekick_network = "mainnet"
 hiro_api_url = "https://api.mainnet.hiro.so"
 hiro_archive_path = "mainnet"
 

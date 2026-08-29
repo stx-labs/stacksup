@@ -3,8 +3,7 @@
 
 name = "testnet"
 chain_id = 0x80000000
-sidekick_network = "pox5-testnet"
-hiro_api_url = "https://api.testnet-pox5.hiro.so"
+hiro_api_url = "https://api.testnet.hiro.so"
 hiro_archive_path = "testnet"
 
 [bitcoind]

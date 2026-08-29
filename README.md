@@ -85,9 +85,12 @@ accept peers from anywhere.
 
 ## Signer Sidekick
 
-Deployments with a signer can enable [Signer Sidekick](https://github.com/stx-labs/signer-sidekick),
+Any deployment with a node can enable [Signer Sidekick](https://github.com/stx-labs/signer-sidekick),
 the PoX-5 operations dashboard that monitors registration, pool membership,
-rewards, and signer health against your node:
+rewards, and signer health against your node. A signer in the deployment is
+recommended (it feeds the Signer Health page's direct telemetry) but not
+required — sidekick can monitor any deployed, compatible signer-manager
+read-only:
 
 ```toml
 [signer-sidekick]
