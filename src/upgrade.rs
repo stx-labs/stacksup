@@ -553,6 +553,20 @@ mod tests {
     }
 
     #[test]
+    fn sidekick_guidance_uses_bare_semver_tags() {
+        // sidekick's image tags are bare semver since 2.1.0 — generic guidance applies
+        // (parse_version still tolerates the v-prefixed tags of older releases)
+        let mut r = row(Some(vec![2, 0, 0]), false, Some(vec![2, 1, 1]), None);
+        r.name = "signer-sidekick";
+        r.tag_from_image = true;
+        let text = guidance(&r).unwrap();
+        assert!(
+            text.contains("update the tag in [signer-sidekick] `image` to \"2.1.1\""),
+            "got: {text}"
+        );
+    }
+
+    #[test]
     fn dockerhub_path_normalizes_hub_hosts() {
         assert_eq!(dockerhub_path("docker.io/myorg/api"), "myorg/api");
         assert_eq!(dockerhub_path("index.docker.io/myorg/api"), "myorg/api");

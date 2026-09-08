@@ -9,8 +9,9 @@ const REPO_STACKS_SIGNER: (&str, &str) = ("ghcr.io/stacks-network/stacks-signer"
 const REPO_STACKS_API: (&str, &str) = ("hirosystems/stacks-blockchain-api", "latest");
 const REPO_STACKS_MESH_API: (&str, &str) = ("ghcr.io/stx-labs/stacks-mesh-api", "latest");
 const REPO_POSTGRES: (&str, &str) = ("postgres", "latest");
-// sidekick publishes v-prefixed release tags only (no floating `latest`); pin the default.
-const REPO_SIDEKICK: (&str, &str) = ("ghcr.io/stx-labs/signer-sidekick", "v2.0.0");
+// sidekick publishes pinned semver image tags only (no floating `latest`); releases before
+// 2.1.0 used v-prefixed tags.
+const REPO_SIDEKICK: (&str, &str) = ("ghcr.io/stx-labs/signer-sidekick", "2.1.1");
 
 fn image(
     (default_repo, default_tag): (&str, &str),
@@ -152,19 +153,11 @@ pub fn roster(deployment: &Deployment) -> Vec<(&'static str, ServiceMode)> {
     ]
 }
 
-/// Sidekick's GHCR tags are v-prefixed (`v2.0.0`); accept `version = "2.0.0"` and normalize.
 pub fn signer_sidekick_image(deployment: &Deployment) -> String {
-    let version = deployment.signer_sidekick.version.as_deref().map(|v| {
-        if v.starts_with('v') {
-            v.to_string()
-        } else {
-            format!("v{v}")
-        }
-    });
     image(
         REPO_SIDEKICK,
         deployment.signer_sidekick.image.as_deref(),
-        version.as_deref(),
+        deployment.signer_sidekick.version.as_deref(),
     )
 }
 
@@ -280,24 +273,19 @@ mod tests {
     }
 
     #[test]
-    fn sidekick_image_normalizes_v_prefix() {
+    fn sidekick_image_uses_semver_tags() {
+        // tags are bare semver since 2.1.0; the version passes through verbatim, so a user
+        // pinning an old release writes its actual tag ("v2.0.0")
         let d = deployment(
             "network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"\nversion = \"2.1.0\"",
         );
         assert_eq!(
             signer_sidekick_image(&d),
-            "ghcr.io/stx-labs/signer-sidekick:v2.1.0"
-        );
-        let d = deployment(
-            "network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"\nversion = \"v2.1.0\"",
-        );
-        assert_eq!(
-            signer_sidekick_image(&d),
-            "ghcr.io/stx-labs/signer-sidekick:v2.1.0"
+            "ghcr.io/stx-labs/signer-sidekick:2.1.0"
         );
         // pinned default tag, never `latest` (sidekick publishes no floating tag)
         let d = deployment("network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"");
-        assert!(signer_sidekick_image(&d).ends_with(":v2.0.0"));
+        assert!(signer_sidekick_image(&d).ends_with(":2.1.1"));
     }
 
     #[test]

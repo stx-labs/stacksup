@@ -171,7 +171,7 @@ pub struct SignerSidekick {
     /// Docker image override: a repository that keeps using `version`/the default tag, or a full
     /// ref with its own tag (mutually exclusive with `version`).
     pub image: Option<String>,
-    /// Release version (e.g. "2.0.0"); becomes image tag v<version>.
+    /// The image tag (semver, e.g. "2.1.1"; releases before 2.1.0 used v-prefixed tags).
     pub version: Option<String>,
     /// The deployed PoX-5 signer-manager contract this deployment's signer registers through
     /// (SP....contract-name). Required when enabled.

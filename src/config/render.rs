@@ -610,7 +610,8 @@ stacks_private_key = "REPLACE_ME"
         rpc_port = node_rpc_port(deployment),
         endpoint_port = SIGNER_ENDPOINT_PORT,
         auth = node_auth_token(deployment),
-        network = deployment.network,
+        // resolved name, not the config reference (which may be a definition file path)
+        network = deployment.net.name,
     )
 }
 
@@ -697,13 +698,10 @@ fn sidekick_env(deployment: &Deployment) -> String {
          SIDEKICK_ENGINE_MODE={engine}\n\
          SIDEKICK_TRUSTED_MANAGER_PROFILES_DIR=/etc/sidekick/trusted-managers\n\
          SIDEKICK_COMPATIBILITY_PROFILES_DIR=/etc/sidekick/network-compatibility\n",
-        // The chain was promoted to be THE testnet, but sidekick's config still rejects the
-        // plain name and wants its legacy selector (config.ts maps pox5-testnet -> testnet
-        // internally). Delete this translation once sidekick accepts "testnet".
-        network = match deployment.network.as_str() {
-            "testnet" => "pox5-testnet",
-            other => other,
-        },
+        // The RESOLVED definition's name — `deployment.network` may be a custom definition
+        // file path. Plain "testnet" is canonical since sidekick 2.1.0 (pox5-testnet is a
+        // legacy alias; 2.0.0 targeted a chain id that no longer exists).
+        network = deployment.net.name,
         node_host = node_rpc_host(deployment).unwrap_or_default(),
         node_rpc = node_rpc_port(deployment),
         api_url = sidekick_api_url(deployment),
@@ -790,6 +788,12 @@ fn sidekick_service(deployment: &Deployment, data_owner: &std::fs::Metadata) -> 
 /// tag's tarball into rendered/signer-sidekick/, or accept user-provided directories as-is.
 fn ensure_sidekick_profiles(deployment: &Deployment, data_dir: &Path, dest: &Path) -> Result<()> {
     let tag = crate::utils::versions::image_tag(&signer_sidekick_image(deployment));
+    // Image tags are bare semver since 2.1.0 but the repo's git tags stay v-prefixed.
+    let git_tag = if tag.starts_with('v') {
+        tag.clone()
+    } else {
+        format!("v{tag}")
+    };
     let marker = dest.join(".profiles-version");
     let have_dirs =
         dest.join("trusted-managers").is_dir() && dest.join("network-compatibility").is_dir();
@@ -806,13 +810,13 @@ fn ensure_sidekick_profiles(deployment: &Deployment, data_dir: &Path, dest: &Pat
     }
 
     let url =
-        format!("https://codeload.github.com/stx-labs/signer-sidekick/tar.gz/refs/tags/{tag}");
-    println!("Fetching signer-sidekick {tag} manager/compatibility profiles...");
+        format!("https://codeload.github.com/stx-labs/signer-sidekick/tar.gz/refs/tags/{git_tag}");
+    println!("Fetching signer-sidekick {git_tag} manager/compatibility profiles...");
     let resp = ureq::get(&url).call().map_err(|e| {
         anyhow::anyhow!(
-            "cannot download sidekick profiles for {tag} ({e}) — offline, or the tag has no \
-             GitHub release; place `trusted-managers/` and `network-compatibility/` from the \
-             signer-sidekick repo under {} yourself",
+            "cannot download sidekick profiles for {git_tag} ({e}) — offline, or the tag has \
+             no GitHub release; place `trusted-managers/` and `network-compatibility/` from \
+             the signer-sidekick repo under {} yourself",
             dest.display()
         )
     })?;
@@ -1093,8 +1097,8 @@ mod tests {
     fn sidekick_env_wires_node_api_and_telemetry() {
         let d = sidekick_deployment();
         let env = sidekick_env(&d);
-        // sidekick still requires its legacy selector for the promoted testnet
-        assert!(env.contains("SIDEKICK_NETWORK=pox5-testnet"), "got: {env}");
+        // plain "testnet" is canonical since sidekick 2.1.0
+        assert!(env.contains("SIDEKICK_NETWORK=testnet"), "got: {env}");
         assert!(env.contains("STACKS_NODE_RPC_URL=http://stacks-node:20443"));
         // managed stacks-api is the indexed API by default
         assert!(env.contains("STACKS_API_URL=http://stacks-api:3999"));
