@@ -88,6 +88,20 @@ struct ComposeService {
     secrets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     extra_hosts: Vec<String>,
+    /// Container user override ("uid:gid"): lets a non-root image write our bind mounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
+    // Hardening knobs (used by services whose upstream compose ships them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    init: Option<bool>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    read_only: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tmpfs: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    security_opt: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cap_drop: Vec<String>,
 }
 
 impl ComposeService {
@@ -190,6 +204,25 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
         compose
             .services
             .insert("stacks-mesh-api".into(), mesh_api_service(deployment));
+    }
+
+    if deployment.signer_sidekick.mode == ServiceMode::Enabled {
+        chainstate_subdir("signer-sidekick")?;
+        std::fs::create_dir_all(dir.join("signer-sidekick"))?;
+        // Carries the dashboard auth token (and optionally a Hiro API key) -> 0600.
+        secrets::write_0600(
+            &dir.join("signer-sidekick/.env"),
+            &format!("{GENERATED_HEADER}{}", sidekick_env(deployment)),
+        )?;
+        ensure_sidekick_profiles(deployment, data_dir, &dir.join("signer-sidekick"))?;
+        // The image bakes in a non-root user (uid 10001) with no root entrypoint to chown a
+        // mount, so the service runs as the OWNER of the chainstate dir instead — that keeps
+        // its sqlite inside --data-dir like every other service's state (back up one unit).
+        let owner = std::fs::metadata(data_dir.join("chainstate/signer-sidekick"))?;
+        compose.services.insert(
+            "signer-sidekick".into(),
+            sidekick_service(deployment, &owner),
+        );
     }
 
     if deployment.postgres.mode == ServiceMode::Enabled {
@@ -457,6 +490,12 @@ fn node_config_toml(deployment: &Deployment) -> String {
     } else {
         out.push_str("miner = false\nstacker = false\n");
     }
+    if deployment.signer_sidekick.mode == ServiceMode::Enabled {
+        // Sidekick's Signer Health page reads node telemetry (container-internal endpoint).
+        out.push_str(&format!(
+            "prometheus_bind = \"0.0.0.0:{NODE_METRICS_PORT}\"\n"
+        ));
+    }
     if let Some(extra) = &net.node.node_extra {
         out.push_str(extra.trim());
         out.push('\n');
@@ -553,19 +592,26 @@ fn node_config_toml(deployment: &Deployment) -> String {
 
 fn signer_config_toml(deployment: &Deployment) -> String {
     let node_host = node_rpc_host(deployment).unwrap_or_default();
+    let metrics = if deployment.signer_sidekick.mode == ServiceMode::Enabled {
+        // Sidekick reads /info, /heartbeat, /metrics from here (container-internal).
+        format!("metrics_endpoint = \"0.0.0.0:{SIGNER_METRICS_PORT}\"\n")
+    } else {
+        String::new()
+    };
     format!(
         r#"node_host = "{node_host}:{rpc_port}"
 endpoint = "0.0.0.0:{endpoint_port}"
 auth_password = "{auth}"
 network = "{network}"
 db_path = "/var/lib/stacks-signer/signerdb.sqlite"
-# TODO(hackathon): source the signing key from a secrets file, never this rendered config
+{metrics}# TODO(hackathon): source the signing key from a secrets file, never this rendered config
 stacks_private_key = "REPLACE_ME"
 "#,
         rpc_port = node_rpc_port(deployment),
         endpoint_port = SIGNER_ENDPOINT_PORT,
         auth = node_auth_token(deployment),
-        network = deployment.network,
+        // resolved name, not the config reference (which may be a definition file path)
+        network = deployment.net.name,
     )
 }
 
@@ -636,6 +682,171 @@ STACKS_CORE_RPC_AUTH_TOKEN={auth_token}
         node_rpc = node_rpc_port(deployment),
         auth_token = node_auth_token(deployment),
     )
+}
+
+/// Env for signer-sidekick (compose.yaml in stx-labs/signer-sidekick is the schema of record).
+/// The engine defaults to observe; operator-run is a deliberate operator opt-in, and its gas
+/// wallet is generated inside sidekick's own UI — no key ever passes through here.
+fn sidekick_env(deployment: &Deployment) -> String {
+    let sk = &deployment.signer_sidekick;
+    let mut out = format!(
+        "SIDEKICK_NETWORK={network}\n\
+         STACKS_NODE_RPC_URL=http://{node_host}:{node_rpc}\n\
+         STACKS_API_URL={api_url}\n\
+         SIDEKICK_MANAGER_PRINCIPAL={manager}\n\
+         SIDEKICK_AUTH_TOKEN={auth}\n\
+         SIDEKICK_ENGINE_MODE={engine}\n\
+         SIDEKICK_TRUSTED_MANAGER_PROFILES_DIR=/etc/sidekick/trusted-managers\n\
+         SIDEKICK_COMPATIBILITY_PROFILES_DIR=/etc/sidekick/network-compatibility\n",
+        // The RESOLVED definition's name — `deployment.network` may be a custom definition
+        // file path. Plain "testnet" is canonical since sidekick 2.1.0 (pox5-testnet is a
+        // legacy alias; 2.0.0 targeted a chain id that no longer exists).
+        network = deployment.net.name,
+        node_host = node_rpc_host(deployment).unwrap_or_default(),
+        node_rpc = node_rpc_port(deployment),
+        api_url = sidekick_api_url(deployment),
+        manager = sk.manager_principal.as_deref().unwrap_or_default(),
+        auth = sk.auth_token.as_deref().unwrap_or_default(),
+        engine = sk.engine_mode.as_deref().unwrap_or("observe"),
+    );
+    if let Some(key) = sk.stacks_api_key.as_deref() {
+        out.push_str(&format!("STACKS_API_KEY={key}\n"));
+    }
+    // Direct telemetry for the Signer Health page — only endpoints we render ourselves.
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
+        out.push_str(&format!(
+            "STACKS_NODE_METRICS_URL=http://stacks-node:{NODE_METRICS_PORT}/metrics\n"
+        ));
+    }
+    if deployment.stacks_signer.mode == ServiceMode::Enabled {
+        out.push_str(&format!(
+            "STACKS_SIGNER_MONITORING_URL=http://stacks-signer:{SIGNER_METRICS_PORT}\n"
+        ));
+    }
+    out
+}
+
+/// The indexed Stacks API sidekick reads roster/history from: explicit config wins, then the
+/// deployment's own API, then the network's Hiro API.
+fn sidekick_api_url(deployment: &Deployment) -> String {
+    if let Some(url) = deployment.signer_sidekick.stacks_api_url.as_deref() {
+        return url.to_string();
+    }
+    if deployment.stacks_api.mode == ServiceMode::Enabled {
+        return format!("http://stacks-api:{API_PORT}");
+    }
+    deployment.net.hiro_api_url.clone().unwrap_or_default()
+}
+
+fn sidekick_service(deployment: &Deployment, data_owner: &std::fs::Metadata) -> ComposeService {
+    use std::os::unix::fs::MetadataExt;
+    let mut svc = ComposeService::new(
+        deployment,
+        "signer-sidekick",
+        &signer_sidekick_image(deployment),
+    );
+    // Run as the chainstate dir's owner so the bind mount is writable by construction.
+    svc.user = Some(format!("{}:{}", data_owner.uid(), data_owner.gid()));
+    svc.env_file = vec!["./signer-sidekick/.env".into()];
+    // Dashboard only; bearer-token login is the only auth, so loopback-only. The event listener
+    // (3700) stays container-internal.
+    svc.ports = vec![format!(
+        "127.0.0.1:{}:{SIDEKICK_CONTAINER_PORT}",
+        deployment.published(SIDEKICK_PORT)
+    )];
+    svc.volumes = vec![
+        "../chainstate/signer-sidekick:/data".into(),
+        "./signer-sidekick/trusted-managers:/etc/sidekick/trusted-managers:ro".into(),
+        "./signer-sidekick/network-compatibility:/etc/sidekick/network-compatibility:ro".into(),
+    ];
+    // It talks to the node RPC and signer monitoring (core); joins services only to reach a
+    // managed stacks-api when that is its indexed API.
+    svc.networks = vec![NET_CORE.into()];
+    if deployment.stacks_api.mode == ServiceMode::Enabled
+        && deployment.signer_sidekick.stacks_api_url.is_none()
+    {
+        svc.networks.push(NET_SERVICES.into());
+    }
+    if deployment.stacks_node.mode == ServiceMode::Enabled {
+        svc.depends_on.push("stacks-node".into());
+    }
+    if deployment.stacks_signer.mode == ServiceMode::Enabled {
+        svc.depends_on.push("stacks-signer".into());
+    }
+    // Upstream compose hardening, minus its journald logging (which would break
+    // `stacksup logs`).
+    svc.init = Some(true);
+    svc.read_only = true;
+    svc.tmpfs = vec!["/tmp:size=64m,mode=1777".into()];
+    svc.security_opt = vec!["no-new-privileges:true".into()];
+    svc.cap_drop = vec!["ALL".into()];
+    svc
+}
+
+/// The release image does not bundle sidekick's manager/compatibility profile directories (its
+/// own deployment flow clones the repo at the release tag). Fetch them once per version from the
+/// tag's tarball into rendered/signer-sidekick/, or accept user-provided directories as-is.
+fn ensure_sidekick_profiles(deployment: &Deployment, data_dir: &Path, dest: &Path) -> Result<()> {
+    let tag = crate::utils::versions::image_tag(&signer_sidekick_image(deployment));
+    // Image tags are bare semver since 2.1.0 but the repo's git tags stay v-prefixed.
+    let git_tag = if tag.starts_with('v') {
+        tag.clone()
+    } else {
+        format!("v{tag}")
+    };
+    let marker = dest.join(".profiles-version");
+    let have_dirs =
+        dest.join("trusted-managers").is_dir() && dest.join("network-compatibility").is_dir();
+    if have_dirs
+        && std::fs::read_to_string(&marker)
+            .map(|v| v.trim() == tag)
+            .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    if have_dirs && !marker.exists() {
+        // User-provided profiles: theirs to manage, never overwritten.
+        return Ok(());
+    }
+
+    let url =
+        format!("https://codeload.github.com/stx-labs/signer-sidekick/tar.gz/refs/tags/{git_tag}");
+    println!("Fetching signer-sidekick {git_tag} manager/compatibility profiles...");
+    let resp = ureq::get(&url).call().map_err(|e| {
+        anyhow::anyhow!(
+            "cannot download sidekick profiles for {git_tag} ({e}) — offline, or the tag has \
+             no GitHub release; place `trusted-managers/` and `network-compatibility/` from \
+             the signer-sidekick repo under {} yourself",
+            dest.display()
+        )
+    })?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(resp.into_reader()));
+    let staging = data_dir.join("downloads").join("sidekick-profiles-tmp");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging)?;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        // Entries are prefixed "signer-sidekick-<ver>/"; keep only the two profile trees.
+        let Ok(rel) = path.strip_prefix(path.components().next().unwrap()) else {
+            continue;
+        };
+        let rel = rel.to_path_buf();
+        if rel.starts_with("trusted-managers") || rel.starts_with("network-compatibility") {
+            entry.unpack(staging.join(&rel))?;
+        }
+    }
+    for sub in ["trusted-managers", "network-compatibility"] {
+        if !staging.join(sub).is_dir() {
+            anyhow::bail!("sidekick tarball for {tag} did not contain {sub}/");
+        }
+        let target = dest.join(sub);
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::rename(staging.join(sub), &target)?;
+    }
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::write(&marker, format!("{tag}\n"))?;
+    Ok(())
 }
 
 /// Config the user must apply to their *external* node so push edges (events to the API, signer
@@ -871,6 +1082,127 @@ mod tests {
         let compose: serde_yaml::Value =
             serde_yaml::from_str(&std::fs::read_to_string(compose_file(&dir)).unwrap()).unwrap();
         assert_eq!(compose["name"].as_str(), Some("testnet-b"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const SIDEKICK_FULL: &str = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"";
+
+    fn sidekick_deployment() -> Deployment {
+        let mut d = deployment(SIDEKICK_FULL);
+        d.signer_sidekick.auth_token = Some("test-sidekick-token".into());
+        d
+    }
+
+    #[test]
+    fn sidekick_env_wires_node_api_and_telemetry() {
+        let d = sidekick_deployment();
+        let env = sidekick_env(&d);
+        // plain "testnet" is canonical since sidekick 2.1.0
+        assert!(env.contains("SIDEKICK_NETWORK=testnet"), "got: {env}");
+        assert!(env.contains("STACKS_NODE_RPC_URL=http://stacks-node:20443"));
+        // managed stacks-api is the indexed API by default
+        assert!(env.contains("STACKS_API_URL=http://stacks-api:3999"));
+        assert!(
+            env.contains("SIDEKICK_MANAGER_PRINCIPAL=SP000000000000000000002Q6VF78.signer-manager")
+        );
+        assert!(env.contains("SIDEKICK_AUTH_TOKEN=test-sidekick-token"));
+        assert!(env.contains("SIDEKICK_ENGINE_MODE=observe"));
+        // managed node + signer -> direct telemetry endpoints
+        assert!(env.contains("STACKS_NODE_METRICS_URL=http://stacks-node:9153/metrics"));
+        assert!(env.contains("STACKS_SIGNER_MONITORING_URL=http://stacks-signer:30001"));
+
+        // no managed API -> the network's Hiro API
+        let mut d = deployment(
+            "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[signer-sidekick]\nmode = \"enabled\"\nmanager_principal = \"SP000000000000000000002Q6VF78.signer-manager\"",
+        );
+        d.signer_sidekick.auth_token = Some("test-sidekick-token".into());
+        assert!(
+            sidekick_env(&d).contains("STACKS_API_URL=https://api.testnet.hiro.so"),
+            "got: {}",
+            sidekick_env(&d)
+        );
+    }
+
+    #[test]
+    fn sidekick_service_hardening_networks_and_ports() {
+        let meta = std::fs::metadata(std::env::temp_dir()).unwrap();
+        let d = sidekick_deployment();
+        let svc = sidekick_service(&d, &meta);
+        // loopback dashboard on 3997 host-side; container keeps 3998
+        assert_eq!(svc.ports, vec!["127.0.0.1:3997:3998"]);
+        // core (node+signer) plus services (managed API is its indexed API)
+        assert_eq!(svc.networks, vec!["core", "services"]);
+        assert!(svc.read_only);
+        assert_eq!(svc.cap_drop, vec!["ALL"]);
+        // state is a data-dir bind mount, writable because the service runs
+        // as the chainstate dir's owner
+        assert!(
+            svc.volumes
+                .iter()
+                .any(|v| v == "../chainstate/signer-sidekick:/data")
+        );
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            svc.user.as_deref(),
+            Some(format!("{}:{}", meta.uid(), meta.gid()).as_str())
+        );
+
+        // explicit external API URL -> no services membership
+        let mut d = sidekick_deployment();
+        d.signer_sidekick.stacks_api_url = Some("https://api.example.com".into());
+        assert_eq!(sidekick_service(&d, &meta).networks, vec!["core"]);
+    }
+
+    #[test]
+    fn sidekick_enables_node_and_signer_telemetry_endpoints() {
+        let with = sidekick_deployment();
+        assert!(node_config_toml(&with).contains("prometheus_bind = \"0.0.0.0:9153\""));
+        assert!(signer_config_toml(&with).contains("metrics_endpoint = \"0.0.0.0:30001\""));
+        // ... and ONLY when sidekick is enabled
+        let without = deployment(TESTNET_FULL);
+        assert!(!node_config_toml(&without).contains("prometheus_bind"));
+        assert!(!signer_config_toml(&without).contains("metrics_endpoint"));
+    }
+
+    #[test]
+    fn render_with_user_provided_sidekick_profiles() {
+        let dir =
+            std::env::temp_dir().join(format!("stacksup-sidekick-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Pre-place the profile dirs: user-managed, so render must not fetch or overwrite.
+        for sub in ["trusted-managers", "network-compatibility"] {
+            std::fs::create_dir_all(dir.join("rendered/signer-sidekick").join(sub)).unwrap();
+        }
+        std::fs::write(
+            dir.join("rendered/signer-sidekick/trusted-managers/mine.json"),
+            "{}",
+        )
+        .unwrap();
+
+        let d = sidekick_deployment();
+        render(&d, &dir).unwrap();
+
+        let compose_text = std::fs::read_to_string(compose_file(&dir)).unwrap();
+        let compose: serde_yaml::Value = serde_yaml::from_str(&compose_text).unwrap();
+        assert!(
+            compose["services"]
+                .as_mapping()
+                .unwrap()
+                .contains_key("signer-sidekick")
+        );
+        assert!(dir.join("chainstate/signer-sidekick").is_dir());
+        // user-provided profiles untouched
+        assert!(
+            dir.join("rendered/signer-sidekick/trusted-managers/mine.json")
+                .exists()
+        );
+        // env is owner-only (auth token inside)
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join("rendered/signer-sidekick/.env"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

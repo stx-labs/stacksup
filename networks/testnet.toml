@@ -3,6 +3,7 @@
 
 name = "testnet"
 chain_id = 0x80000000
+hiro_api_url = "https://api.testnet.hiro.so"
 hiro_archive_path = "testnet"
 
 [bitcoind]

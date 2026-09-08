@@ -5,6 +5,8 @@
 use std::process::Command;
 
 pub fn parse_version(s: &str) -> Option<Vec<u64>> {
+    // Tolerate v-prefixed tags (signer-sidekick releases as v2.0.0).
+    let s = s.strip_prefix('v').unwrap_or(s);
     let parts: Result<Vec<u64>, _> = s.split('.').map(str::parse).collect();
     parts.ok().filter(|v: &Vec<u64>| !v.is_empty())
 }
@@ -77,6 +79,13 @@ fn version_from_label(label: &str) -> Option<Vec<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_version_tolerates_v_prefix() {
+        assert_eq!(parse_version("v2.0.0"), Some(vec![2, 0, 0]));
+        assert_eq!(parse_version("2.0.0"), Some(vec![2, 0, 0]));
+        assert_eq!(parse_version("vNot"), None);
+    }
     use std::cmp::Ordering::*;
 
     #[test]

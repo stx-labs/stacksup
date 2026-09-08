@@ -83,6 +83,41 @@ off-host), so containers can't sidestep the split via
 `host.docker.internal`; the P2P port stays open on purpose — it exists to
 accept peers from anywhere.
 
+## Signer Sidekick
+
+Any deployment with a node can enable [Signer Sidekick](https://github.com/stx-labs/signer-sidekick),
+the PoX-5 operations dashboard that monitors registration, pool membership,
+rewards, and signer health against your node. A signer in the deployment is
+recommended (it feeds the Signer Health page's direct telemetry) but not
+required — sidekick can monitor any deployed, compatible signer-manager
+read-only:
+
+```toml
+[signer-sidekick]
+mode = "enabled"
+manager_principal = "SP....signer-manager"  # your deployed PoX-5 signer-manager
+```
+
+Sidekick's database lives under `chainstate/signer-sidekick/` like every
+other service's state (the container runs as the directory's owner, so the
+image's non-root user can write the bind mount). For an online backup while
+sidekick is running — especially before relying on an operator-run gas
+wallet — use its own tooling:
+
+```bash
+docker compose -f rendered/docker-compose.yml run --rm --no-deps signer-sidekick database backup /data/backup.sqlite
+```
+
+stacksup wires it by construction: node RPC and (when managed) node/signer
+telemetry endpoints, the managed stacks-api as its indexed API (falling back
+to the network's Hiro API), the dashboard auth token from `secrets.toml`
+(`[signer-sidekick] auth_token`), and the release's manager/compatibility
+profiles fetched once per version. The dashboard publishes loopback-only on
+port 3997 (shifted by `port_offset`); `stacksup chainstate wipe
+signer-sidekick` wipes its database. The engine defaults to `observe`; set
+`engine_mode = "operator-run"` only after reading sidekick's operator docs
+(its gas wallet is created inside the dashboard, never in config files).
+
 ## Running multiple deployments
 
 One machine can host several stacks side by side. Give each deployment its

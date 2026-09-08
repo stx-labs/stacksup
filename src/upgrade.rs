@@ -80,6 +80,16 @@ pub fn run(deployment: &Deployment, service: Option<&str>) -> Result<()> {
                 .is_some_and(has_explicit_tag),
         ),
         (
+            "signer-sidekick",
+            deployment.signer_sidekick.mode,
+            crate::utils::services::signer_sidekick_image(deployment),
+            deployment
+                .signer_sidekick
+                .image
+                .as_deref()
+                .is_some_and(has_explicit_tag),
+        ),
+        (
             "postgres",
             deployment.postgres.mode,
             crate::utils::services::postgres_image(deployment),
@@ -540,6 +550,20 @@ mod tests {
         r.tag_from_image = true;
         let text = guidance(&r).unwrap();
         assert!(text.contains("update the tag in [stacks-api] `image` to \"9.0.2\""));
+    }
+
+    #[test]
+    fn sidekick_guidance_uses_bare_semver_tags() {
+        // sidekick's image tags are bare semver since 2.1.0 — generic guidance applies
+        // (parse_version still tolerates the v-prefixed tags of older releases)
+        let mut r = row(Some(vec![2, 0, 0]), false, Some(vec![2, 1, 1]), None);
+        r.name = "signer-sidekick";
+        r.tag_from_image = true;
+        let text = guidance(&r).unwrap();
+        assert!(
+            text.contains("update the tag in [signer-sidekick] `image` to \"2.1.1\""),
+            "got: {text}"
+        );
     }
 
     #[test]

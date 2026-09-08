@@ -9,6 +9,9 @@ const REPO_STACKS_SIGNER: (&str, &str) = ("ghcr.io/stacks-network/stacks-signer"
 const REPO_STACKS_API: (&str, &str) = ("hirosystems/stacks-blockchain-api", "latest");
 const REPO_STACKS_MESH_API: (&str, &str) = ("ghcr.io/stx-labs/stacks-mesh-api", "latest");
 const REPO_POSTGRES: (&str, &str) = ("postgres", "latest");
+// sidekick publishes pinned semver image tags only (no floating `latest`); releases before
+// 2.1.0 used v-prefixed tags.
+const REPO_SIDEKICK: (&str, &str) = ("ghcr.io/stx-labs/signer-sidekick", "2.1.1");
 
 fn image(
     (default_repo, default_tag): (&str, &str),
@@ -79,6 +82,14 @@ pub const API_EVENT_PORT: u16 = 3700;
 pub const MESH_API_PORT: u16 = 3998;
 pub const SIGNER_ENDPOINT_PORT: u16 = 30000;
 pub const POSTGRES_PORT: u16 = 5432;
+/// Host-side dashboard publish (container listens on 3998, which collides with the mesh API's
+/// host port). Loopback-only: bearer-token login is the only auth.
+pub const SIDEKICK_PORT: u16 = 3997;
+pub const SIDEKICK_CONTAINER_PORT: u16 = 3998;
+/// Node prometheus + signer monitoring endpoints, wired (container-internal) when sidekick is
+/// enabled so its Signer Health page gets direct telemetry.
+pub const NODE_METRICS_PORT: u16 = 9153;
+pub const SIGNER_METRICS_PORT: u16 = 30001;
 
 /// bitcoind ports: per-stack override, else the network definition's default.
 pub fn bitcoind_rpc_port(deployment: &Deployment) -> u16 {
@@ -137,8 +148,17 @@ pub fn roster(deployment: &Deployment) -> Vec<(&'static str, ServiceMode)> {
         ("stacks-signer", deployment.stacks_signer.mode),
         ("stacks-api", deployment.stacks_api.mode),
         ("stacks-mesh-api", deployment.stacks_mesh_api.mode),
+        ("signer-sidekick", deployment.signer_sidekick.mode),
         ("postgres", deployment.postgres.mode),
     ]
+}
+
+pub fn signer_sidekick_image(deployment: &Deployment) -> String {
+    image(
+        REPO_SIDEKICK,
+        deployment.signer_sidekick.image.as_deref(),
+        deployment.signer_sidekick.version.as_deref(),
+    )
 }
 
 /// Every (service, host port) this deployment publishes when started, the base ports shifted by
@@ -164,6 +184,9 @@ pub fn published_ports(deployment: &Deployment) -> Vec<(&'static str, u16)> {
     }
     if deployment.stacks_mesh_api.mode == ServiceMode::Enabled {
         ports.push(("stacks-mesh-api", deployment.published(MESH_API_PORT)));
+    }
+    if deployment.signer_sidekick.mode == ServiceMode::Enabled {
+        ports.push(("signer-sidekick", deployment.published(SIDEKICK_PORT)));
     }
     if deployment.postgres.mode == ServiceMode::Enabled {
         ports.push(("postgres", deployment.published(POSTGRES_PORT)));
@@ -250,11 +273,27 @@ mod tests {
     }
 
     #[test]
+    fn sidekick_image_uses_semver_tags() {
+        // tags are bare semver since 2.1.0; the version passes through verbatim, so a user
+        // pinning an old release writes its actual tag ("v2.0.0")
+        let d = deployment(
+            "network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"\nversion = \"2.1.0\"",
+        );
+        assert_eq!(
+            signer_sidekick_image(&d),
+            "ghcr.io/stx-labs/signer-sidekick:2.1.0"
+        );
+        // pinned default tag, never `latest` (sidekick publishes no floating tag)
+        let d = deployment("network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"");
+        assert!(signer_sidekick_image(&d).ends_with(":2.1.1"));
+    }
+
+    #[test]
     fn roster_lists_all_services_with_modes() {
         use crate::config::ServiceMode;
         let s = deployment("network = \"testnet\"\n[postgres]\nmode = \"enabled\"");
         let roster = roster(&s);
-        assert_eq!(roster.len(), 6);
+        assert_eq!(roster.len(), 7);
         let (name, mode) = roster.iter().find(|(n, _)| *n == "postgres").unwrap();
         assert_eq!(*name, "postgres");
         assert_eq!(*mode, ServiceMode::Enabled);
