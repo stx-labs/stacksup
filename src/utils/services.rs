@@ -11,7 +11,7 @@ const REPO_STACKS_MESH_API: (&str, &str) = ("ghcr.io/stx-labs/stacks-mesh-api", 
 const REPO_POSTGRES: (&str, &str) = ("postgres", "latest");
 // sidekick publishes pinned semver image tags only (no floating `latest`); releases before
 // 2.1.0 used v-prefixed tags.
-const REPO_SIDEKICK: (&str, &str) = ("ghcr.io/stx-labs/signer-sidekick", "2.1.1");
+const REPO_SIDEKICK: (&str, &str) = ("ghcr.io/stx-labs/signer-sidekick", "2.3.0");
 
 fn image(
     (default_repo, default_tag): (&str, &str),
@@ -285,7 +285,7 @@ mod tests {
         );
         // pinned default tag, never `latest` (sidekick publishes no floating tag)
         let d = deployment("network = \"testnet\"\n[signer-sidekick]\nmode = \"enabled\"");
-        assert!(signer_sidekick_image(&d).ends_with(":2.1.1"));
+        assert!(signer_sidekick_image(&d).ends_with(":2.3.0"));
     }
 
     #[test]
