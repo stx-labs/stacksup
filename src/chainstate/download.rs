@@ -295,9 +295,11 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
 /// their name, which would defeat the archive-version ≤ configured-version check.
 fn latest_node_job(network: &str, deployment: &Deployment, downloads: &Path) -> Result<Job> {
     let base = format!("{ARCHIVE_BASE}/{network}/stacks-blockchain");
+    // Usually the path segment, but e.g. staking-testnet's archives are named signet-*.
+    let prefix = deployment.net.hiro_archive_prefix().unwrap_or(network);
     let name = newest_in_listing(
         &base,
-        &format!("{network}-stacks-blockchain-"),
+        &format!("{prefix}-stacks-blockchain-"),
         &[".tar.zst", ".tar.gz"],
     )?;
     versioned_job(Kind::Node, &base, &name, deployment, downloads)
@@ -448,14 +450,12 @@ fn pinned_job(
         );
     }
 
-    // A filename that names the other network is a subtle disaster; block it.
-    let other = if network == "mainnet" {
-        "testnet"
-    } else {
-        "mainnet"
-    };
-    if name.starts_with(other) {
-        bail!("archive `{name}` is for {other}, but stacks.toml says network = \"{network}\"");
+    // A filename that names another network is a subtle disaster (a different genesis); block it.
+    if let Some(other) = other_network_archive(&name, deployment) {
+        bail!(
+            "archive `{name}` is for {other}, but stacks.toml says network = \"{}\"",
+            deployment.net.name
+        );
     }
 
     let size = head_content_length(&url).with_context(|| format!("archive not found at {url}"))?;
@@ -467,6 +467,18 @@ fn pinned_job(
         archive_version: parse_version_from_name(&name, kind),
         image,
     })
+}
+
+/// The built-in network a node archive filename belongs to, when that isn't this deployment's.
+fn other_network_archive(name: &str, deployment: &Deployment) -> Option<&'static str> {
+    let own = deployment.net.hiro_archive_prefix();
+    crate::config::network::builtin_archive_prefixes()
+        .into_iter()
+        .find(|(_, prefix)| {
+            Some(prefix.as_str()) != own
+                && name.starts_with(&format!("{prefix}-stacks-blockchain-"))
+        })
+        .map(|(other, _)| other)
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,6 +1234,48 @@ mod tests {
         );
         assert_eq!(
             parse_date_from_name("testnet-stacks-blockchain-latest.tar.zst"),
+            None
+        );
+    }
+
+    #[test]
+    fn staking_testnet_archives_use_the_signet_prefix() {
+        assert_eq!(
+            parse_version_from_name(
+                "signet-stacks-blockchain-4.0.4-20260927.tar.zst",
+                Kind::Node
+            ),
+            Some(vec![4, 0, 4])
+        );
+        let d = crate::config::test_deployment("network = \"staking-testnet\"");
+        assert_eq!(d.net.hiro_archive_path.as_deref(), Some("staking-testnet"));
+        assert_eq!(d.net.hiro_archive_prefix(), Some("signet"));
+    }
+
+    #[test]
+    fn archives_from_another_network_are_named() {
+        let staking = crate::config::test_deployment("network = \"staking-testnet\"");
+        let testnet = crate::config::test_deployment("network = \"testnet\"");
+        let mainnet = crate::config::test_deployment("network = \"mainnet\"");
+        let signet = "signet-stacks-blockchain-4.0.4-20260927.tar.zst";
+        let krypton = "testnet-stacks-blockchain-4.0.4-20260927.tar.zst";
+        assert_eq!(other_network_archive(signet, &staking), None);
+        assert_eq!(other_network_archive(krypton, &staking), Some("testnet"));
+        assert_eq!(
+            other_network_archive(signet, &testnet),
+            Some("staking-testnet")
+        );
+        assert_eq!(other_network_archive(krypton, &mainnet), Some("testnet"));
+        assert_eq!(
+            other_network_archive(
+                "mainnet-stacks-blockchain-3.1.0.0.8-20260803.tar.gz",
+                &testnet
+            ),
+            Some("mainnet")
+        );
+        // API dumps carry no network in their name
+        assert_eq!(
+            other_network_archive("stacks-blockchain-api-pg-17-9.3.1-20260927.dump", &staking),
             None
         );
     }

@@ -273,6 +273,11 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
         "-server=1".into(),
         "-txindex=0".into(),
         format!("-chain={}", deployment.net.bitcoind.chain),
+    ];
+    if let Some(challenge) = &deployment.net.bitcoind.signet_challenge {
+        svc.command.push(format!("-signetchallenge={challenge}"));
+    }
+    svc.command.extend([
         "-rpcbind=0.0.0.0".into(),
         "-rpcallowip=0.0.0.0/0".into(),
         // A salted hash, unlike -rpcpassword, safe to expose via docker inspect. The plaintext
@@ -290,7 +295,7 @@ fn bitcoind_service(deployment: &Deployment) -> ComposeService {
             )
             .replace('$', "$$")
         ),
-    ];
+    ]);
     // Loopback-bind the RPC port: every container carries a host.docker.internal alias, so a
     // 0.0.0.0 publish would let API-side containers reach bitcoind through the host, bypassing the
     // network split. Operators still get bitcoin-cli on localhost. Only an external node (running
@@ -514,6 +519,12 @@ fn node_config_toml(deployment: &Deployment) -> String {
         "mode = \"{}\"\nchain = \"bitcoin\"\n",
         net.node.burnchain_mode
     ));
+    // Always explicit: each mode has its own default (signet's is 0x80000001), and a custom-id
+    // network only syncs with peers that share its id.
+    out.push_str(&format!("chain_id = 0x{:08x}\n", net.chain_id));
+    if let Some(challenge) = &net.bitcoind.signet_challenge {
+        out.push_str(&format!("signet_challenge = \"{challenge}\"\n"));
+    }
     // Burnchain endpoint: managed/external bitcoind, else the network's hosted default (validation
     // guarantees one of these exists for a node).
     if let Some(host) = bitcoind_host(deployment).or_else(|| net.bitcoind.default_host.clone()) {
@@ -603,6 +614,7 @@ fn signer_config_toml(deployment: &Deployment) -> String {
 endpoint = "0.0.0.0:{endpoint_port}"
 auth_password = "{auth}"
 network = "{network}"
+chain_id = 0x{chain_id:08x}
 db_path = "/var/lib/stacks-signer/signerdb.sqlite"
 {metrics}# TODO(hackathon): source the signing key from a secrets file, never this rendered config
 stacks_private_key = "REPLACE_ME"
@@ -610,8 +622,10 @@ stacks_private_key = "REPLACE_ME"
         rpc_port = node_rpc_port(deployment),
         endpoint_port = SIGNER_ENDPOINT_PORT,
         auth = node_auth_token(deployment),
-        // resolved name, not the config reference (which may be a definition file path)
-        network = deployment.net.name,
+        // the family, not the definition name: the signer only knows mainnet/testnet/signet, and
+        // chain_id pins custom-id networks
+        network = deployment.net.family(),
+        chain_id = deployment.net.chain_id,
     )
 }
 
@@ -632,7 +646,7 @@ fn api_env(deployment: &Deployment) -> String {
     let chain_id = format!("0x{:08x}", deployment.net.chain_id);
     let node_host = node_rpc_host(deployment).unwrap_or_default();
     let pg_host = postgres_host(deployment).unwrap_or_default();
-    format!(
+    let mut out = format!(
         r#"NODE_ENV=production
 STACKS_CHAIN_ID={chain_id}
 STACKS_BLOCKCHAIN_API_HOST=0.0.0.0
@@ -660,7 +674,15 @@ TESTNET_SBTC_FAUCET_ENABLED=false
         pg_user = deployment.postgres.user.as_deref().unwrap_or("postgres"),
         pg_password = deployment.postgres.password.as_deref().unwrap_or_default(),
         pg_db = API_PG_DATABASE,
-    )
+    );
+    // The API rejects every /new_block carrying a chain id it doesn't know.
+    if deployment.net.has_custom_chain_id() {
+        out.push_str(&format!(
+            "CUSTOM_CHAIN_IDS={}={chain_id}\n",
+            deployment.net.family()
+        ));
+    }
+    out
 }
 
 /// Env for the Stacks Mesh API (packages/api/src/env.ts is the schema of record). Online mode needs
@@ -698,10 +720,10 @@ fn sidekick_env(deployment: &Deployment) -> String {
          SIDEKICK_ENGINE_MODE={engine}\n\
          SIDEKICK_TRUSTED_MANAGER_PROFILES_DIR=/etc/sidekick/trusted-managers\n\
          SIDEKICK_COMPATIBILITY_PROFILES_DIR=/etc/sidekick/network-compatibility\n",
-        // The RESOLVED definition's name — `deployment.network` may be a custom definition
-        // file path. Plain "testnet" is canonical since sidekick 2.1.0 (pox5-testnet is a
-        // legacy alias; 2.0.0 targeted a chain id that no longer exists).
-        network = deployment.net.name,
+        // The family, not the definition name: sidekick knows only mainnet/testnet (plain
+        // "testnet" is canonical since 2.1.0; pox5-testnet is a legacy alias). Custom-id
+        // networks pin SIDEKICK_NETWORK_ID below.
+        network = deployment.net.family(),
         node_host = node_rpc_host(deployment).unwrap_or_default(),
         node_rpc = node_rpc_port(deployment),
         api_url = sidekick_api_url(deployment),
@@ -709,6 +731,12 @@ fn sidekick_env(deployment: &Deployment) -> String {
         auth = sk.auth_token.as_deref().unwrap_or_default(),
         engine = sk.engine_mode.as_deref().unwrap_or("observe"),
     );
+    if deployment.net.has_custom_chain_id() {
+        out.push_str(&format!(
+            "SIDEKICK_NETWORK_ID={}\n",
+            deployment.net.chain_id
+        ));
+    }
     if let Some(key) = sk.stacks_api_key.as_deref() {
         out.push_str(&format!("STACKS_API_KEY={key}\n"));
     }
@@ -929,6 +957,59 @@ mod tests {
     }
 
     #[test]
+    fn staking_testnet_node_config_follows_the_signet() {
+        let s = deployment("network = \"staking-testnet\"\n[stacks-node]\nmode = \"enabled\"");
+        let parsed: toml::Value =
+            toml::from_str(&node_config_toml(&s)).expect("rendered node config is valid TOML");
+        let burnchain = &parsed["burnchain"];
+        assert_eq!(burnchain["mode"].as_str(), Some("signet"));
+        assert_eq!(burnchain["chain_id"].as_integer(), Some(0x00000500));
+        assert_eq!(
+            burnchain["signet_challenge"].as_str(),
+            Some("0014511787db620184f553cfa06bb2a6607497f09f4a")
+        );
+        assert_eq!(
+            burnchain["peer_host"].as_str(),
+            Some("bitcoin.staking-testnet.hiro.so")
+        );
+        assert_eq!(burnchain["rpc_port"].as_integer(), Some(38332));
+        assert_eq!(burnchain["peer_port"].as_integer(), Some(38333));
+        // the signet build owns the epoch schedule and PoX lengths
+        assert!(burnchain.get("epochs").is_none());
+        assert!(burnchain.get("pox_prepare_length").is_none());
+        assert!(
+            parsed["node"]["bootstrap_node"]
+                .as_str()
+                .unwrap()
+                .ends_with("@3.136.174.30:20444")
+        );
+        assert!(parsed["node"]["pox_5_sbtc_contract"].as_str().is_some());
+        assert_eq!(parsed["ustx_balance"].as_array().unwrap().len(), 17);
+    }
+
+    #[test]
+    fn chain_id_is_explicit_everywhere_it_matters() {
+        let full = TESTNET_FULL.replace("\"testnet\"", "\"staking-testnet\"");
+        let s = deployment(&full);
+        let signer: toml::Value = toml::from_str(&signer_config_toml(&s)).unwrap();
+        // the signer knows networks by family; chain_id pins the custom id
+        assert_eq!(signer["network"].as_str(), Some("testnet"));
+        assert_eq!(signer["chain_id"].as_integer(), Some(0x00000500));
+        let env = api_env(&s);
+        assert!(env.contains("STACKS_CHAIN_ID=0x00000500"));
+        assert!(env.contains("CUSTOM_CHAIN_IDS=testnet=0x00000500"));
+
+        // standard networks: explicit ids, but no custom-id plumbing
+        let s = deployment(TESTNET_FULL);
+        let node: toml::Value = toml::from_str(&node_config_toml(&s)).unwrap();
+        assert_eq!(node["burnchain"]["chain_id"].as_integer(), Some(0x80000000));
+        assert!(node["burnchain"].get("signet_challenge").is_none());
+        let signer: toml::Value = toml::from_str(&signer_config_toml(&s)).unwrap();
+        assert_eq!(signer["chain_id"].as_integer(), Some(0x80000000));
+        assert!(!api_env(&s).contains("CUSTOM_CHAIN_IDS"));
+    }
+
+    #[test]
     fn signer_flips_stacker_and_shares_auth_token() {
         let s = deployment(TESTNET_FULL);
         let node: toml::Value = toml::from_str(&node_config_toml(&s)).unwrap();
@@ -1091,6 +1172,16 @@ mod tests {
         let mut d = deployment(SIDEKICK_FULL);
         d.signer_sidekick.auth_token = Some("test-sidekick-token".into());
         d
+    }
+
+    #[test]
+    fn sidekick_env_pins_custom_chain_id() {
+        let mut d = deployment(&SIDEKICK_FULL.replace("\"testnet\"", "\"staking-testnet\""));
+        d.signer_sidekick.auth_token = Some("test-sidekick-token".into());
+        let env = sidekick_env(&d);
+        assert!(env.contains("SIDEKICK_NETWORK=testnet\n"), "got: {env}");
+        assert!(env.contains("SIDEKICK_NETWORK_ID=1280\n"), "got: {env}");
+        assert!(!sidekick_env(&sidekick_deployment()).contains("SIDEKICK_NETWORK_ID"));
     }
 
     #[test]

@@ -1,0 +1,96 @@
+# Network definition: the Stacks staking testnet (PoX-5 / Bitcoin staking), a Stacks chain on the
+# Hiro-hosted custom Bitcoin signet. Referenced from stacks.toml as `network = "staking-testnet"`.
+#
+# Mirrors the live follower configs (stx-labs/infrastructure stacks-seed/signet). Requires a
+# stacks-core build with `burnchain.mode = "signet"` (4.0.4+).
+
+name = "staking-testnet"
+chain_id = 0x00000500
+hiro_api_url = "https://api.staking-testnet.hiro.so"
+hiro_archive_path = "staking-testnet"
+hiro_archive_prefix = "signet"
+
+[bitcoind]
+allow_managed = false
+chain = "signet"
+rpc_port = 38332
+p2p_port = 38333
+default_host = "bitcoin.staking-testnet.hiro.so"
+signet_challenge = "0014511787db620184f553cfa06bb2a6607497f09f4a"
+
+[node]
+burnchain_mode = "signet"
+bootstrap_node = "025b2f33eedfa699fa375f115d0c32a36820dd351a3d7f670a18fc324bfd6d1f63@3.136.174.30:20444"
+node_extra = '''
+pox_5_sbtc_contract = "SN3R84XZYA63QS28932XQF3G1J8R9PC3W76P9CSQS.sbtc-token"
+pox_5_sbtc_registry_contract = "SN3R84XZYA63QS28932XQF3G1J8R9PC3W76P9CSQS.sbtc-registry"
+pox_5_bond_admin = "ST1V2ASRWGR81W7GBN1Z4W2JQKXJWCADPVZG30X45"
+'''
+
+[[ustx_balance]]
+address = "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST31XHNM0GZ2K978FPP4QA3STNQ73Z8C9G9MJEPK2"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST1B38CGQRPXEMRH7B66VXTS22DQTNMSW4YJJ7QK1"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "STDMN71Z0H9EF8CRKAWTGBB5YS0BNV26HZ79QFFP"
+amount = 1000000000000000
+
+[[ustx_balance]]
+address = "ST1E0PSCH72JMQH9QCH293ZTEEH7BPA40Y3F39XQ"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST3QBTK0Q438YVNX8EG6Z85HN0WKQPXYT25H5SPPK"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST10BX04F9PC6N1WBXKW3H7CG0NS0A3PK650T3P3R"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST3AF1BBQAFSFCM8K4ZBR1FBXP3P8J1CKGSGDHWR5"
+amount = 100000000000000
+
+[[ustx_balance]]
+address = "STHY13V44422NAN6D3NSJPY9CDR3ED1M6HH9WZ6Y"
+amount = 10000000000000
+
+[[ustx_balance]]
+address = "ST3NBRSFKX28FQ2ZJ1MAKX58HKHSDGNV5N7R21XCP"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST3PF13W7Z0RRM42A8VZRVFQ75SV1K26RXEP8YGKJ"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST3AM1A56AK2C1XAFJ4115ZSV26EB49BVQ10MGCS0"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "SN3R84XZYA63QS28932XQF3G1J8R9PC3W76P9CSQS"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST1V2ASRWGR81W7GBN1Z4W2JQKXJWCADPVZG30X45"
+amount = 10000000000000000
