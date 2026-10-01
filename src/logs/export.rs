@@ -222,6 +222,8 @@ fn secret_values(deployment: &Deployment) -> Vec<String> {
         deployment.bitcoind.rpc_user.clone(),
         deployment.bitcoind.rpc_password.clone(),
         deployment.stacks_node.auth_token.clone(),
+        deployment.signer_sidekick.auth_token.clone(),
+        deployment.signer_sidekick.stacks_api_key.clone(),
     ]
     .into_iter()
     .flatten()

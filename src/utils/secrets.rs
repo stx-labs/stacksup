@@ -34,6 +34,8 @@ pub struct SecretsOverlay {
     pub postgres: PostgresSecrets,
     #[serde(default, rename = "stacks-node")]
     pub stacks_node: NodeSecrets,
+    #[serde(default, rename = "signer-sidekick")]
+    pub signer_sidekick: SidekickSecrets,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -53,6 +55,15 @@ pub struct PostgresSecrets {
 #[serde(deny_unknown_fields)]
 pub struct NodeSecrets {
     pub auth_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SidekickSecrets {
+    /// Dashboard bearer-token login (sidekick's own credential, distinct from the node token).
+    pub auth_token: Option<String>,
+    /// Optional Hiro API key for indexed-API backfill.
+    pub stacks_api_key: Option<String>,
 }
 
 fn secrets_path(data_dir: &Path) -> PathBuf {
@@ -99,11 +110,21 @@ pub fn load(data_dir: &Path) -> Result<Option<SecretsOverlay>> {
 /// Every present value must be long enough to redact safely and free of characters that need
 /// escaping in any rendered format (TOML strings, env files, compose commands).
 fn validate_values(overlay: &SecretsOverlay, path: &Path) -> Result<()> {
-    let fields: [(&str, &str, &Option<String>); 4] = [
+    let fields: [(&str, &str, &Option<String>); 6] = [
         ("bitcoind", "rpc_user", &overlay.bitcoind.rpc_user),
         ("bitcoind", "rpc_password", &overlay.bitcoind.rpc_password),
         ("postgres", "password", &overlay.postgres.password),
         ("stacks-node", "auth_token", &overlay.stacks_node.auth_token),
+        (
+            "signer-sidekick",
+            "auth_token",
+            &overlay.signer_sidekick.auth_token,
+        ),
+        (
+            "signer-sidekick",
+            "stacks_api_key",
+            &overlay.signer_sidekick.stacks_api_key,
+        ),
     ];
     for (section, field, value) in fields {
         let Some(v) = value else { continue };
@@ -143,11 +164,13 @@ pub fn generate_if_missing(data_dir: &Path) -> Result<()> {
          # modifies it; missing values are reported as errors at render time.\n\n\
          [postgres]\npassword = \"{}\"\n\n\
          [bitcoind]\nrpc_user = \"stacksup-{}\"\nrpc_password = \"{}\"\n\n\
-         [stacks-node]\nauth_token = \"{}\"\n",
+         [stacks-node]\nauth_token = \"{}\"\n\n\
+         [signer-sidekick]\nauth_token = \"{}\"\n",
         random_hex(32)?,
         // rpc_user is redacted in `logs export`; a random suffix keeps that exact-value scrub from
         // also eating every plain "stacksup" in logs.
         random_hex(4)?,
+        random_hex(32)?,
         random_hex(32)?,
         random_hex(32)?,
     );
