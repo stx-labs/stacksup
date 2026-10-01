@@ -47,6 +47,12 @@ migration. Unknown names resolve as custom definition files next to your
 stacks.toml (`networks/<name>.toml`), so you can define private networks
 without a tool release.
 
+| network | burnchain | chain id |
+|---|---|---|
+| `mainnet` | Bitcoin mainnet (bring your own bitcoind) | `0x00000001` |
+| `testnet` | Hiro-hosted bitcoin regtest (krypton) | `0x80000000` |
+| `staking-testnet` | Hiro-hosted custom bitcoin signet (PoX-5 / Bitcoin staking; stacks-core 4.0.4+) | `0x00000500` |
+
 ## The model
 
 `stacks.toml` is the single source of truth. Every service has a `mode`:

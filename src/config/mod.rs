@@ -49,8 +49,8 @@ pub struct Deployment {
     /// the API on 4099, postgres on 5532, and so on.
     #[serde(default)]
     pub port_offset: u16,
-    /// Network name: a built-in definition (mainnet, testnet) or a custom definition file resolved
-    /// relative to stacks.toml.
+    /// Network name: a built-in definition (mainnet, testnet, staking-testnet) or a custom
+    /// definition file resolved relative to stacks.toml.
     pub network: String,
     /// The resolved definition; populated by `load()` after parsing.
     #[serde(skip)]
@@ -638,7 +638,7 @@ const DEFAULT_STACK_TOML: &str = r#"# stacksup config
 #                `version`/the default tag, or a full ref with its own tag
 #                (then omit `version`)
 
-network = "testnet" # mainnet | testnet | custom network definition file
+network = "testnet" # mainnet | testnet | staking-testnet | custom network definition file
 
 # To run several deployments on one machine, give each a distinct name
 # (compose project + container prefix) and shift its published host ports:
@@ -647,7 +647,7 @@ network = "testnet" # mainnet | testnet | custom network definition file
 
 [bitcoind]
 # Only needed on mainnet. Testnet (krypton) follows the Hiro-hosted bitcoin
-# regtest.
+# regtest, staking-testnet the Hiro-hosted bitcoin signet.
 mode = "disabled"
 # version = "29"
 # For mode = "external":
@@ -730,6 +730,19 @@ mod tests {
     fn mainnet_node_requires_bitcoind() {
         let e = errors("network = \"mainnet\"\n[stacks-node]\nmode = \"enabled\"");
         assert!(e.iter().any(|m| m.contains("requires bitcoind")));
+    }
+
+    #[test]
+    fn staking_testnet_follows_the_hosted_signet() {
+        assert!(
+            errors("network = \"staking-testnet\"\n[stacks-node]\nmode = \"enabled\"").is_empty()
+        );
+        let e = errors("network = \"staking-testnet\"\n[bitcoind]\nmode = \"enabled\"");
+        assert!(
+            e.iter()
+                .any(|m| m.contains("bitcoin.staking-testnet.hiro.so")),
+            "{e:?}"
+        );
     }
 
     #[test]
