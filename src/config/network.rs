@@ -171,9 +171,16 @@ fn parse(raw: &str) -> Result<NetworkDef> {
     if def.bitcoind.rpc_port == 0 || def.bitcoind.p2p_port == 0 {
         bail!("network definition must set non-zero [bitcoind] rpc_port and p2p_port");
     }
+    // Signet on one side only means a managed bitcoind and the node follow different burnchains.
+    if (def.bitcoind.chain == "signet") != (def.node.burnchain_mode == "signet") {
+        bail!(
+            "[bitcoind] chain = \"signet\" and [node] burnchain_mode = \"signet\" must be set \
+             together"
+        );
+    }
     if let Some(challenge) = &def.bitcoind.signet_challenge {
         // stacks-node rejects signet_challenge outside signet mode; bitcoind needs -chain=signet.
-        if def.bitcoind.chain != "signet" || def.node.burnchain_mode != "signet" {
+        if def.bitcoind.chain != "signet" {
             bail!(
                 "[bitcoind] signet_challenge requires [bitcoind] chain = \"signet\" and \
                  [node] burnchain_mode = \"signet\""
@@ -271,6 +278,14 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("requires"));
+        // signet on one side only, with or without a challenge
+        for (chain, mode) in [("test", "signet"), ("signet", "krypton")] {
+            let err = parse(&def(chain, mode, "")).unwrap_err().to_string();
+            assert!(
+                err.contains("must be set together"),
+                "{chain}/{mode}: {err}"
+            );
+        }
         let err = parse(&def("signet", "signet", "signet_challenge = \"5g\""))
             .unwrap_err()
             .to_string();
