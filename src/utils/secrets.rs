@@ -212,7 +212,7 @@ fn random_hex(bytes: usize) -> Result<String> {
 /// `user:salt$hex(hmac_sha256(key=salt, msg=password))`. Never stored — a hand-edited password
 /// can't drift from its hash.
 pub fn bitcoind_rpcauth(user: &str, password: &str) -> String {
-    let salt = derived_salt(user, password);
+    let salt = derived_salt(user);
     let mut mac = Hmac::<Sha256>::new_from_slice(salt.as_bytes()).expect("hmac accepts any key");
     mac.update(password.as_bytes());
     let digest: String = mac
@@ -226,10 +226,12 @@ pub fn bitcoind_rpcauth(user: &str, password: &str) -> String {
 
 /// Deterministic salt so the rpcauth line (and the rendered compose file) is stable across renders.
 /// Salt secrecy is not load-bearing in the rpcauth scheme, bitcoind stores it in plaintext beside
-/// the hash.
-fn derived_salt(user: &str, password: &str) -> String {
+/// the hash. Derived from the username only: the salt is published (compose file, docker inspect),
+/// so a password-derived one would be a fast unsalted password hash. Generated usernames carry a
+/// random suffix, which keeps the salt unique per deployment.
+fn derived_salt(user: &str) -> String {
     use sha2::Digest;
-    let digest = Sha256::digest(format!("{user}:{password}").as_bytes());
+    let digest = Sha256::digest(format!("stacksup-rpcauth-salt:{user}").as_bytes());
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -375,6 +377,19 @@ mod tests {
         assert!(a.starts_with("user:"));
         assert_eq!(a.split('$').nth(1).unwrap().len(), 64);
         assert_ne!(a, bitcoind_rpcauth("user", "other-password"));
+    }
+
+    #[test]
+    fn rpcauth_salt_does_not_depend_on_the_password() {
+        let salt = |line: String| line.split(['$', ':']).nth(1).unwrap().to_string();
+        assert_eq!(
+            salt(bitcoind_rpcauth("user", "password")),
+            salt(bitcoind_rpcauth("user", "other-password"))
+        );
+        assert_ne!(
+            salt(bitcoind_rpcauth("user", "password")),
+            salt(bitcoind_rpcauth("other-user", "password"))
+        );
     }
 
     #[test]
