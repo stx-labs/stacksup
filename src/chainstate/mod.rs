@@ -36,11 +36,16 @@ pub fn status(deployment: &Deployment, data_dir: &Path) -> Result<()> {
     if deployment.bitcoind.mode == ServiceMode::Enabled {
         tips.push(bitcoind_tip(
             deployment,
+            data_dir,
             running.iter().any(|s| s == "bitcoind"),
         ));
     }
     if deployment.stacks_api.mode == ServiceMode::Enabled {
-        tips.push(api_tip(deployment, running.iter().any(|s| s == "postgres")));
+        tips.push(api_tip(
+            deployment,
+            data_dir,
+            running.iter().any(|s| s == "postgres"),
+        ));
     }
 
     if tips.is_empty() {
@@ -180,7 +185,7 @@ fn node_tip(deployment: &Deployment, data_dir: &Path) -> Tip {
 
 /// bitcoind's own height via bitcoin-cli inside the running container. Offline its state is
 /// LevelDB, which we don't parse.
-fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
+fn bitcoind_tip(deployment: &Deployment, data_dir: &Path, running: bool) -> Tip {
     let mut tip = Tip {
         service: "bitcoind",
         source: "bitcoin-cli (running container)".into(),
@@ -193,18 +198,9 @@ fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
             Some("bitcoind is not running, height in LevelDB is not readable offline".into());
         return tip;
     }
-    let chain = deployment.net.bitcoind.chain.as_str();
     // bitcoin-cli inside the container authenticates via the datadir cookie file, no credentials
     // needed (and none appear in process args).
-    let out = Command::new("docker")
-        .args([
-            "exec",
-            "stacks-bitcoind",
-            "bitcoin-cli",
-            &format!("-chain={chain}"),
-            "getblockcount",
-        ])
-        .output();
+    let out = bitcoind_tip_command(deployment, data_dir).output();
     match out {
         Ok(o) if o.status.success() => {
             tip.bitcoin = String::from_utf8_lossy(&o.stdout).trim().parse().ok();
@@ -220,9 +216,18 @@ fn bitcoind_tip(deployment: &Deployment, running: bool) -> Tip {
     tip
 }
 
+fn bitcoind_tip_command(deployment: &Deployment, data_dir: &Path) -> Command {
+    let chain = format!("-chain={}", deployment.net.bitcoind.chain.as_str());
+    crate::utils::docker::compose_exec(
+        data_dir,
+        "bitcoind",
+        &["bitcoin-cli", &chain, "getblockcount"],
+    )
+}
+
 /// The API's indexed tip from its Postgres chain_tip table (single-row table with block_height and
 /// burn_block_height). Needs the postgres server up.
-fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
+fn api_tip(deployment: &Deployment, data_dir: &Path, postgres_running: bool) -> Tip {
     let mut tip = Tip {
         service: "stacks-api",
         source: "postgres chain_tip table".into(),
@@ -238,20 +243,7 @@ fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
         tip.note = Some("postgres is not running, `stacksup start` to check the API's tip".into());
         return tip;
     }
-    let user = deployment.postgres.user.as_deref().unwrap_or("postgres");
-    let out = Command::new("docker")
-        .args([
-            "exec",
-            "stacks-postgres",
-            "psql",
-            "-U",
-            user,
-            "-d",
-            "stacks_blockchain_api",
-            "-tAc",
-            "SELECT block_height, burn_block_height FROM stacks_blockchain_api.chain_tip",
-        ])
-        .output();
+    let out = api_tip_command(deployment, data_dir).output();
     match out {
         Ok(o) if o.status.success() => {
             let text = String::from_utf8_lossy(&o.stdout);
@@ -271,6 +263,23 @@ fn api_tip(deployment: &Deployment, postgres_running: bool) -> Tip {
         Err(e) => tip.note = Some(format!("could not run psql: {e}")),
     }
     tip
+}
+
+fn api_tip_command(deployment: &Deployment, data_dir: &Path) -> Command {
+    let user = deployment.postgres.user.as_deref().unwrap_or("postgres");
+    crate::utils::docker::compose_exec(
+        data_dir,
+        "postgres",
+        &[
+            "psql",
+            "-U",
+            user,
+            "-d",
+            "stacks_blockchain_api",
+            "-tAc",
+            "SELECT block_height, burn_block_height FROM stacks_blockchain_api.chain_tip",
+        ],
+    )
 }
 
 /// Services that keep on-disk state under chainstate/, with the running services that would be
@@ -434,6 +443,82 @@ mod tests {
         let tip = node_tip(&s, &dir);
         assert_eq!(tip.stacks, None);
         assert!(tip.note.unwrap().contains("has the node run yet"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn args(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn tip_probes_exec_through_this_deployments_compose_project() {
+        let s = deployment(
+            "name = \"testnet-b\"\nnetwork = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        let dir = Path::new("/dd");
+        let compose_file = crate::config::render::compose_file(dir);
+        let compose_file = compose_file.to_string_lossy();
+
+        let api = args(&api_tip_command(&s, dir));
+        assert_eq!(api[..3], ["compose", "-f", &compose_file]);
+        let expected = [
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "stacks_blockchain_api",
+            "-tAc",
+            "SELECT block_height, burn_block_height FROM stacks_blockchain_api.chain_tip",
+        ];
+        assert_eq!(api[3..], expected);
+
+        let btc = args(&bitcoind_tip_command(&s, dir));
+        assert_eq!(btc[..3], ["compose", "-f", &compose_file]);
+        let expected = [
+            "exec",
+            "-T",
+            "bitcoind",
+            "bitcoin-cli",
+            "-chain=main",
+            "getblockcount",
+        ];
+        assert_eq!(btc[3..], expected);
+
+        let s = deployment(
+            "network = \"testnet\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"\nuser = \"stacks\"",
+        );
+        let api = args(&api_tip_command(&s, dir));
+        assert_eq!(api[7..9], ["-U", "stacks"]);
+    }
+
+    #[test]
+    fn tip_probes_use_rendered_service_names() {
+        let dir = temp_dir("services");
+        let mut s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        s.postgres.password = Some("test-pg-password".into());
+        s.stacks_node.auth_token = Some("test-node-token".into());
+        s.bitcoind.rpc_user = Some("stacksup".into());
+        s.bitcoind.rpc_password = Some("test-btc-password".into());
+        crate::config::render::render(&s, &dir).unwrap();
+
+        let compose_file = crate::config::render::compose_file(&dir);
+        let compose: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(compose_file).unwrap()).unwrap();
+        let services = compose["services"].as_mapping().unwrap();
+        for cmd in [api_tip_command(&s, &dir), bitcoind_tip_command(&s, &dir)] {
+            let service = args(&cmd)[5].clone();
+            assert!(
+                services.contains_key(service.as_str()),
+                "{service} is not rendered"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

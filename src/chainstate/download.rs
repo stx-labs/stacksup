@@ -961,8 +961,7 @@ fn restore_api(
     println!("Starting postgres...");
     crate::utils::docker::compose_up_service(data_dir, "postgres")?;
     for _ in 0..60 {
-        let ready = Command::new("docker")
-            .args(["exec", "stacks-postgres", "pg_isready", "-U", user])
+        let ready = pg_isready_command(data_dir, user)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
@@ -977,24 +976,7 @@ fn restore_api(
     spinner.set_style(
         ProgressStyle::with_template("{spinner} {elapsed} restored {pos} objects").unwrap(),
     );
-    let mut child = Command::new("docker")
-        .args([
-            "exec",
-            "stacks-postgres",
-            "pg_restore",
-            "--username",
-            user,
-            "--verbose",
-            "--jobs",
-            "4",
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-acl",
-            "--dbname",
-            "stacks_blockchain_api",
-            &in_container,
-        ])
+    let mut child = pg_restore_command(data_dir, user, &in_container)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -1025,6 +1007,32 @@ fn restore_api(
     println!("Stopping postgres...");
     crate::utils::docker::compose_stop_service(data_dir, "postgres")?;
     verdict
+}
+
+fn pg_isready_command(data_dir: &Path, user: &str) -> Command {
+    crate::utils::docker::compose_exec(data_dir, "postgres", &["pg_isready", "-U", user])
+}
+
+fn pg_restore_command(data_dir: &Path, user: &str, in_container: &str) -> Command {
+    crate::utils::docker::compose_exec(
+        data_dir,
+        "postgres",
+        &[
+            "pg_restore",
+            "--username",
+            user,
+            "--verbose",
+            "--jobs",
+            "4",
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-acl",
+            "--dbname",
+            "stacks_blockchain_api",
+            in_container,
+        ],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,6 +1117,45 @@ fn free_disk_bytes(dir: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_commands_run_in_this_deployments_postgres_service() {
+        let dir = Path::new("/dd");
+        let compose_file = crate::config::render::compose_file(dir);
+        let compose_file = compose_file.to_string_lossy();
+        let args = |cmd: Command| -> Vec<String> {
+            cmd.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+
+        let ready = args(pg_isready_command(dir, "stacks"));
+        assert_eq!(ready[..3], ["compose", "-f", &compose_file]);
+        let expected = ["exec", "-T", "postgres", "pg_isready", "-U", "stacks"];
+        assert_eq!(ready[3..], expected);
+
+        let restore = args(pg_restore_command(dir, "stacks", "/downloads/x.dump"));
+        assert_eq!(restore[..3], ["compose", "-f", &compose_file]);
+        let expected = [
+            "exec",
+            "-T",
+            "postgres",
+            "pg_restore",
+            "--username",
+            "stacks",
+            "--verbose",
+            "--jobs",
+            "4",
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-acl",
+            "--dbname",
+            "stacks_blockchain_api",
+            "/downloads/x.dump",
+        ];
+        assert_eq!(restore[3..], expected);
+    }
 
     #[test]
     fn parses_node_archive_version() {
