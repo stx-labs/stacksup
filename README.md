@@ -164,7 +164,12 @@ rpc_password = "..."
 
 [stacks-node]
 auth_token = "..."
+
+[stacks-signer]
+stacks_private_key = "..."
 ```
+
+`stacks_private_key` is required when the signer is enabled. It must be 64 hex characters, optionally followed by `01`, matching stacks-signer config. It is never generated and must be provided by you since it is registered on-chain. It is rendered only into the signer's read-only `0600` `signer.toml`.
 
 `stacksup config init` generates one with random values when none exists;
 an existing `secrets.toml` is yours and is **never modified or overwritten**

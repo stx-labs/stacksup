@@ -172,7 +172,7 @@ pub fn render(deployment: &Deployment, data_dir: &Path) -> Result<PathBuf> {
     if deployment.stacks_signer.mode == ServiceMode::Enabled {
         chainstate_subdir("stacks-signer")?;
         std::fs::create_dir_all(dir.join("stacks-signer"))?;
-        // Carries the node auth token (auth_password) -> 0600.
+        // Carries the node auth token (auth_password) and the signing key -> 0600.
         secrets::write_0600(
             &dir.join("stacks-signer/signer.toml"),
             &format!("{GENERATED_HEADER}{}", signer_config_toml(deployment)),
@@ -616,12 +616,18 @@ auth_password = "{auth}"
 network = "{network}"
 chain_id = 0x{chain_id:08x}
 db_path = "/var/lib/stacks-signer/signerdb.sqlite"
-{metrics}# TODO(hackathon): source the signing key from a secrets file, never this rendered config
-stacks_private_key = "REPLACE_ME"
+{metrics}stacks_private_key = "{key}"
 "#,
         rpc_port = node_rpc_port(deployment),
         endpoint_port = SIGNER_ENDPOINT_PORT,
         auth = node_auth_token(deployment),
+        // From secrets.toml. Required for managed signers. stacks-signer reads the key only from this
+        // 0600 read-only file, so it never reaches the compose file, env, or `docker inspect`.
+        key = deployment
+            .stacks_signer
+            .stacks_private_key
+            .as_deref()
+            .unwrap_or_default(),
         // the family, not the definition name: the signer only knows mainnet/testnet/signet, and
         // chain_id pins custom-id networks
         network = deployment.net.family(),
@@ -926,8 +932,16 @@ mod tests {
                 .rpc_password
                 .get_or_insert_with(|| "test-btc-password".into());
         }
+        if d.stacks_signer.mode == ServiceMode::Enabled {
+            d.stacks_signer
+                .stacks_private_key
+                .get_or_insert_with(|| TEST_SIGNER_KEY.into());
+        }
         d
     }
+
+    const TEST_SIGNER_KEY: &str =
+        "eb05c83546fdd2c79f10f5ad5434a90dd28f7e3acb7c092157aa1bc3656b012c01";
 
     const TESTNET_FULL: &str = "network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"\nrole = \"signer-host\"\n[stacks-signer]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[stacks-mesh-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"";
 
@@ -1021,6 +1035,42 @@ mod tests {
         // signer auth_password and mesh env token must match the node's token
         assert!(signer_config_toml(&s).contains(&format!("auth_password = \"{token}\"")));
         assert!(mesh_api_env(&s).contains(&format!("STACKS_CORE_RPC_AUTH_TOKEN={token}")));
+    }
+
+    #[test]
+    fn managed_signer_renders_the_secrets_key() {
+        let text = signer_config_toml(&deployment(TESTNET_FULL));
+        let signer: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(signer["stacks_private_key"].as_str(), Some(TEST_SIGNER_KEY));
+        assert!(
+            !text.contains("REPLACE_ME") && !text.contains("TODO"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn signer_key_lands_only_in_the_mounted_signer_config() {
+        let dir =
+            std::env::temp_dir().join(format!("stacksup-signer-key-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        render(&deployment(TESTNET_FULL), &dir).unwrap();
+        // Every rendered file, the compose file included: the key reaches the signer's mounted
+        // config and nothing `docker inspect` can show.
+        let mut carriers = Vec::new();
+        let mut pending = vec![dir.join("rendered")];
+        while let Some(path) = pending.pop() {
+            if path.is_dir() {
+                pending.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            } else if std::fs::read_to_string(&path).is_ok_and(|t| t.contains(TEST_SIGNER_KEY)) {
+                carriers.push(path.strip_prefix(&dir).unwrap().to_path_buf());
+            }
+        }
+        assert_eq!(
+            carriers,
+            vec![PathBuf::from("rendered/stacks-signer/signer.toml")]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -222,12 +222,20 @@ fn secret_values(deployment: &Deployment) -> Vec<String> {
         deployment.bitcoind.rpc_user.clone(),
         deployment.bitcoind.rpc_password.clone(),
         deployment.stacks_node.auth_token.clone(),
+        deployment.stacks_signer.stacks_private_key.clone(),
         deployment.signer_sidekick.auth_token.clone(),
         deployment.signer_sidekick.stacks_api_key.clone(),
     ]
     .into_iter()
     .flatten()
     .collect();
+    // The signing key may include stacks-signer's `01` compression suffix or be a bare 32-byte scalar.
+    if let Some(key) = &deployment.stacks_signer.stacks_private_key
+        && key.len() == 66
+        && let Some(scalar) = key.get(..64)
+    {
+        v.push(scalar.to_string());
+    }
     if let (Some(user), Some(password)) = (
         &deployment.bitcoind.rpc_user,
         &deployment.bitcoind.rpc_password,
@@ -343,6 +351,20 @@ mod tests {
         let digest = rpcauth.split('$').next_back().unwrap();
         assert!(!out.contains(digest), "digest survived: {out}");
         assert!(!out.contains("rafa1234"), "username survived: {out}");
+    }
+
+    #[test]
+    fn redacts_the_signer_key_with_and_without_its_suffix() {
+        const KEY: &str = "eb05c83546fdd2c79f10f5ad5434a90dd28f7e3acb7c092157aa1bc3656b012c01";
+        let mut d = crate::config::test_deployment(
+            "network = \"testnet\"\n[stacks-signer]\nmode = \"enabled\"",
+        );
+        d.stacks_signer.stacks_private_key = Some(KEY.into());
+        let secrets = secret_values(&d);
+        assert!(secrets.iter().any(|s| s == KEY));
+        assert!(secrets.iter().any(|s| s == &KEY[..64]));
+        let out = redact(&format!("loaded key {}\n", &KEY[..64]), &secrets);
+        assert!(!out.contains(&KEY[..64]), "scalar survived: {out}");
     }
 
     #[test]

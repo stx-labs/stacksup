@@ -34,6 +34,8 @@ pub struct SecretsOverlay {
     pub postgres: PostgresSecrets,
     #[serde(default, rename = "stacks-node")]
     pub stacks_node: NodeSecrets,
+    #[serde(default, rename = "stacks-signer")]
+    pub stacks_signer: SignerSecrets,
     #[serde(default, rename = "signer-sidekick")]
     pub signer_sidekick: SidekickSecrets,
 }
@@ -55,6 +57,14 @@ pub struct PostgresSecrets {
 #[serde(deny_unknown_fields)]
 pub struct NodeSecrets {
     pub auth_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SignerSecrets {
+    /// The managed signer's key, using stacks-signer's config name for verbatim copying.
+    /// Never generated: the operator must provide the on-chain identity.
+    pub stacks_private_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -100,21 +110,47 @@ pub fn load(data_dir: &Path) -> Result<Option<SecretsOverlay>> {
                 path.display()
             )
         } else {
-            anyhow::anyhow!("invalid secrets file {}: {e}", path.display())
+            anyhow::anyhow!(
+                "invalid secrets file {}: {}",
+                path.display(),
+                describe_toml_error(&raw, &e)
+            )
         }
     })?;
     validate_values(&overlay, &path)?;
     Ok(Some(overlay))
 }
 
+/// `toml::de::Error` may echo secrets from the offending line into terminals and CI logs.
+/// Preserve the location and message, but omit the source snippet.
+pub fn describe_toml_error(raw: &str, e: &toml::de::Error) -> String {
+    match e.span() {
+        Some(span) => {
+            let start = span.start.min(raw.len());
+            let line = raw.as_bytes()[..start]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count()
+                + 1;
+            format!("line {line}: {}", e.message())
+        }
+        None => e.message().to_string(),
+    }
+}
+
 /// Every present value must be long enough to redact safely and free of characters that need
 /// escaping in any rendered format (TOML strings, env files, compose commands).
 fn validate_values(overlay: &SecretsOverlay, path: &Path) -> Result<()> {
-    let fields: [(&str, &str, &Option<String>); 6] = [
+    let fields: [(&str, &str, &Option<String>); 7] = [
         ("bitcoind", "rpc_user", &overlay.bitcoind.rpc_user),
         ("bitcoind", "rpc_password", &overlay.bitcoind.rpc_password),
         ("postgres", "password", &overlay.postgres.password),
         ("stacks-node", "auth_token", &overlay.stacks_node.auth_token),
+        (
+            "stacks-signer",
+            "stacks_private_key",
+            &overlay.stacks_signer.stacks_private_key,
+        ),
         (
             "signer-sidekick",
             "auth_token",
@@ -147,7 +183,40 @@ fn validate_values(overlay: &SecretsOverlay, path: &Path) -> Result<()> {
             );
         }
     }
+    if let Some(key) = &overlay.stacks_signer.stacks_private_key
+        && !is_signer_key(key)
+    {
+        bail!(
+            "[stacks-signer] stacks_private_key in {} is not a valid signer key — expected 64 hex \
+             characters (a secp256k1 private key), optionally followed by 01",
+            path.display()
+        );
+    }
     Ok(())
+}
+
+/// secp256k1 group order n: a private key is a scalar in [1, n).
+const SECP256K1_ORDER: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+    0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+];
+
+/// `stacks-signer` key format: 64 hex characters encoding a scalar in [1, n),
+/// optionally followed by the `01` compressed-public-key marker.
+fn is_signer_key(key: &str) -> bool {
+    if !key.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    let scalar_hex = match key.len() {
+        64 => key,
+        66 if key.ends_with("01") => &key[..64],
+        _ => return false,
+    };
+    let mut scalar = [0u8; 32];
+    for (i, byte) in scalar.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&scalar_hex[2 * i..2 * i + 2], 16).expect("hex checked above");
+    }
+    scalar != [0u8; 32] && scalar < SECP256K1_ORDER
 }
 
 /// Create secrets.toml with generated values, ONLY when it does not exist. An existing file is the
@@ -165,6 +234,10 @@ pub fn generate_if_missing(data_dir: &Path) -> Result<()> {
          [postgres]\npassword = \"{}\"\n\n\
          [bitcoind]\nrpc_user = \"stacksup-{}\"\nrpc_password = \"{}\"\n\n\
          [stacks-node]\nauth_token = \"{}\"\n\n\
+         # Only when [stacks-signer] mode = \"enabled\": the signer's own key (64 hex\n\
+         # characters, optionally followed by 01). Never generated - it is the on-chain\n\
+         # identity you grant and register, so paste yours.\n\
+         # [stacks-signer]\n# stacks_private_key = \"...\"\n\n\
          [signer-sidekick]\nauth_token = \"{}\"\n",
         random_hex(32)?,
         // rpc_user is redacted in `logs export`; a random suffix keeps that exact-value scrub from
@@ -308,6 +381,9 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         let overlay = load(&dir).unwrap().unwrap();
+        let raw = std::fs::read_to_string(dir.join(SECRETS_FILE)).unwrap();
+        assert!(raw.contains("# [stacks-signer]\n# stacks_private_key = \"...\""));
+        assert!(overlay.stacks_signer.stacks_private_key.is_none());
         assert_eq!(overlay.postgres.password.unwrap().len(), 64);
         assert!(overlay.bitcoind.rpc_user.unwrap().starts_with("stacksup-"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -354,6 +430,70 @@ mod tests {
         write_overlay(&dir, "[stacks-node]\nauth_token = \"has$dollar1\"\n");
         let err = load(&dir).unwrap_err().to_string();
         assert!(err.contains("unsupported character"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signer_key_must_be_a_valid_secp256k1_key() {
+        const KEY: &str = "eb05c83546fdd2c79f10f5ad5434a90dd28f7e3acb7c092157aa1bc3656b012c01";
+        let dir = temp_dir("signer-key");
+        let load_key = |key: &str| {
+            write_overlay(
+                &dir,
+                &format!("[stacks-signer]\nstacks_private_key = \"{key}\"\n"),
+            );
+            load(&dir)
+        };
+
+        // compressed and bare forms, any case, up to n - 1
+        let upper = KEY.to_ascii_uppercase();
+        let n_minus_1 = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
+        for ok in [KEY, &KEY[..64], &upper, n_minus_1] {
+            let overlay = load_key(ok)
+                .unwrap_or_else(|e| panic!("{ok} rejected: {e}"))
+                .unwrap();
+            assert_eq!(
+                overlay.stacks_signer.stacks_private_key.as_deref(),
+                Some(ok)
+            );
+        }
+
+        let wrong_marker = format!("{}02", &KEY[..64]);
+        let non_hex = format!("{}g", &KEY[..63]);
+        let zero = "0".repeat(64);
+        let max = "f".repeat(64);
+        let n = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141";
+        for bad in [
+            "REPLACE_ME",
+            &KEY[..63],
+            &KEY[..65],
+            &wrong_marker,
+            &non_hex,
+            &zero,
+            &max,
+            n,
+        ] {
+            let err = load_key(bad).unwrap_err().to_string();
+            assert!(err.contains("stacks_private_key"), "{bad}: {err}");
+            assert!(!err.contains(bad), "error echoed the key: {err}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_errors_never_echo_the_file() {
+        const KEY: &str = "eb05c83546fdd2c79f10f5ad5434a90dd28f7e3acb7c092157aa1bc3656b012c01";
+        let dir = temp_dir("echo");
+        // An unquoted value or misspelled field triggers a TOML error that may echo the line and key.
+        for body in [
+            format!("[stacks-signer]\nstacks_private_key = {KEY}\n"),
+            format!("[stacks-signer]\nprivate_key = \"{KEY}\"\n"),
+        ] {
+            write_overlay(&dir, &body);
+            let err = load(&dir).unwrap_err().to_string();
+            assert!(!err.contains(&KEY[..64]), "key echoed: {err}");
+            assert!(err.contains("line 2:"), "no location: {err}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

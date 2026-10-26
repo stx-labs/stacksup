@@ -123,6 +123,9 @@ pub struct StacksSigner {
     pub image: Option<String>,
     /// Docker image tag for the managed container (defaults to a pinned tag)
     pub version: Option<String>,
+    /// The signer's signing key. SECRET: set in secrets.toml ([stacks-signer]
+    /// stacks_private_key), never here.
+    pub stacks_private_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -268,6 +271,9 @@ impl Deployment {
         if self.stacks_node.auth_token.is_some() {
             leaks.push(("stacks-node", "auth_token"));
         }
+        if self.stacks_signer.stacks_private_key.is_some() {
+            leaks.push(("stacks-signer", "stacks_private_key"));
+        }
         if self.signer_sidekick.auth_token.is_some() {
             leaks.push(("signer-sidekick", "auth_token"));
         }
@@ -283,6 +289,7 @@ impl Deployment {
         self.bitcoind.rpc_password = overlay.bitcoind.rpc_password;
         self.postgres.password = overlay.postgres.password;
         self.stacks_node.auth_token = overlay.stacks_node.auth_token;
+        self.stacks_signer.stacks_private_key = overlay.stacks_signer.stacks_private_key;
         self.signer_sidekick.auth_token = overlay.signer_sidekick.auth_token;
         self.signer_sidekick.stacks_api_key = overlay.signer_sidekick.stacks_api_key;
     }
@@ -308,6 +315,11 @@ impl Deployment {
                     || self.stacks_mesh_api.mode == ServiceMode::Enabled));
         if node_needs_token && self.stacks_node.auth_token.is_none() {
             missing.push(("stacks-node", "auth_token"));
+        }
+        if self.stacks_signer.mode == ServiceMode::Enabled
+            && self.stacks_signer.stacks_private_key.is_none()
+        {
+            missing.push(("stacks-signer", "stacks_private_key"));
         }
         if self.signer_sidekick.mode == ServiceMode::Enabled
             && self.signer_sidekick.auth_token.is_none()
@@ -572,8 +584,13 @@ pub fn load(path: &Path) -> Result<Deployment> {
             path.display()
         )
     })?;
-    let mut deployment: Deployment =
-        toml::from_str(&raw).with_context(|| format!("invalid config in {}", path.display()))?;
+    let mut deployment: Deployment = toml::from_str(&raw).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid config in {}: {}",
+            path.display(),
+            crate::utils::secrets::describe_toml_error(&raw, &e)
+        )
+    })?;
     let config_dir = path.parent().unwrap_or(Path::new("."));
     deployment.net = network::load(&deployment.network, config_dir)?;
 
@@ -668,6 +685,7 @@ role = "follower" # follower | signer-host (required when running a signer)
 [stacks-signer]
 mode = "disabled"
 # version = "3.2.0.0.1.0"
+# The signing key goes in secrets.toml ([stacks-signer] stacks_private_key).
 
 [stacks-api]
 mode = "enabled"
@@ -958,6 +976,13 @@ mod tests {
         assert!(leaks.contains(&("bitcoind", "rpc_password")));
         assert!(leaks.contains(&("postgres", "password")));
         assert!(leaks.contains(&("stacks-node", "auth_token")));
+        let d = deployment(
+            "network = \"testnet\"\n[stacks-signer]\nmode = \"enabled\"\nstacks_private_key = \"k\"",
+        );
+        assert!(
+            d.config_secret_leaks()
+                .contains(&("stacks-signer", "stacks_private_key"))
+        );
         // a clean config has no leaks
         assert!(
             deployment("network = \"testnet\"\n[stacks-node]\nmode = \"enabled\"")
