@@ -190,7 +190,10 @@ cargo build --release   # binary at target/release/stacksup
 `stacksup chainstate download` fetches the node chainstate tarball and/or the
 API's Postgres dump from the [Hiro Archive](https://docs.hiro.so/en/resources/archive/download-guide),
 verifies sha256, and restores them (untar for the node, `pg_restore` for the
-API). Downloads are resumable — Ctrl-C and re-run any time. Useful flags:
+API). Downloads are resumable — Ctrl-C and re-run any time. Dropped or stalled
+connections resume automatically with backoff; it only gives up after 10
+consecutive attempts that receive no new bytes (`STACKSUP_DOWNLOAD_RETRIES` to
+change). Useful flags:
 `--service node|api|all`, `--archive <file|url|path>` to pin a specific
 archive, `--check-only` for a dry-run plan, `--yes` for unattended runs
 (`nohup stacksup chainstate download --yes &`), `--no-verify`,
