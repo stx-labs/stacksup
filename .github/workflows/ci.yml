@@ -58,6 +58,8 @@ jobs:
   # Static musl binaries for the docker image, built on native runners (no QEMU compiles).
   build-binary:
     name: Build binary (${{ matrix.target }})
+    # A manual dispatch can target a tag; versioned images are the Release workflow's job.
+    if: github.ref_type != 'tag'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -102,6 +104,7 @@ jobs:
   # the Release workflow.
   build-publish:
     name: Publish docker image
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     needs: [test, clippy, build-binary]
     permissions:
