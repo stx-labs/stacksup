@@ -1,13 +1,15 @@
 //! `stacksup chainstate download`. Seed chainstate from the Hiro Archive.
 //!
 //! Archives are huge (10s–100s of GB), so the pipeline is two-phase by design: download to
-//! `<data-dir>/downloads/<name>.partial` (resumable via HTTP Range; re-running the command
-//! continues where it left off), verify sha256, and only then restore.
+//! `<data-dir>/downloads/<name>.partial` (resumable via HTTP Range; dropped connections resume
+//! automatically, and re-running the command continues where it left off), verify sha256, and only
+//! then restore.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
@@ -236,7 +238,7 @@ pub fn run(deployment: &Deployment, data_dir: &Path, opts: Opts) -> Result<bool>
                 println!("{name}: already downloaded");
             } else {
                 println!("Downloading {name}...");
-                download_resumable(url, &job.file, job.size)?;
+                download_with_retries(url, &job.file, job.size, RetryPolicy::from_env())?;
             }
         }
 
@@ -649,7 +651,11 @@ fn parse_pg_major_from_name(name: &str) -> Option<Vec<u64>> {
 /// presigned R2 URLs, and resume only works if the Range header is sent to the final URL, so every
 /// request path resolves first.
 fn resolve_redirects(url: &str) -> Result<String> {
-    let agent = ureq::AgentBuilder::new().redirects(0).build();
+    let agent = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_read(READ_TIMEOUT)
+        .build();
     let mut current = url.to_string();
     for _ in 0..5 {
         // Range 0-0 keeps the status probe from opening a full-body stream
@@ -692,20 +698,141 @@ fn head_content_length(url: &str) -> Option<Option<u64>> {
     }
 }
 
+/// Retry policy for archive downloads. Multi-hundred-GB streams from archive.hiro.so routinely get
+/// cut mid-body ("response body closed before all bytes were read"), so transient failures resume
+/// automatically instead of asking the operator to re-run.
+#[derive(Debug, Clone, Copy)]
+struct RetryPolicy {
+    /// Consecutive attempts allowed to fail without writing a single new byte. Any attempt that
+    /// makes progress resets the counter, so a long download survives any number of drops.
+    max_retries: u32,
+    /// First backoff delay; doubles per consecutive failure, capped at `max_delay`.
+    base_delay: Duration,
+    max_delay: Duration,
+}
+
+/// Env override for [`RetryPolicy::max_retries`].
+const RETRIES_ENV: &str = "STACKSUP_DOWNLOAD_RETRIES";
+const DEFAULT_RETRIES: u32 = 10;
+/// A socket read idle this long counts as a dropped connection (and is retried), instead of
+/// hanging forever on a stalled stream.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+impl RetryPolicy {
+    fn from_env() -> Self {
+        let max_retries = std::env::var(RETRIES_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(DEFAULT_RETRIES);
+        RetryPolicy {
+            max_retries,
+            base_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(60),
+        }
+    }
+
+    /// Delay before retry number `attempt` (1-based).
+    fn delay(&self, attempt: u32) -> Duration {
+        let factor = 1u32
+            .checked_shl(attempt.saturating_sub(1))
+            .unwrap_or(u32::MAX);
+        self.base_delay.saturating_mul(factor).min(self.max_delay)
+    }
+}
+
+/// Marks a failure as worth retrying (the stream broke or ended short; the bytes on disk are fine).
+#[derive(Debug)]
+struct Transient(String);
+
+impl std::fmt::Display for Transient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Transient {}
+
+/// Network-level failures, 408/429 and 5xx are retried; anything else (404, 403, disk errors) is
+/// returned immediately because retrying cannot fix it.
+fn is_transient(err: &anyhow::Error) -> bool {
+    err.chain().any(|e| {
+        if e.downcast_ref::<Transient>().is_some() {
+            return true;
+        }
+        match e.downcast_ref::<ureq::Error>() {
+            Some(ureq::Error::Transport(_)) => true,
+            Some(ureq::Error::Status(code, _)) => matches!(code, 408 | 429 | 500..=599),
+            None => false,
+        }
+    })
+}
+
+fn download_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_read(READ_TIMEOUT)
+        .build()
+}
+
+fn partial_path(dest: &Path) -> PathBuf {
+    dest.with_extension(format!(
+        "{}.partial",
+        dest.extension().unwrap_or_default().to_string_lossy()
+    ))
+}
+
+/// [`download_resumable`] in a loop: transient failures back off and resume from the `.partial`
+/// file. Gives up only after `max_retries` consecutive attempts that made no progress.
+fn download_with_retries(
+    url: &str,
+    dest: &Path,
+    expected_size: Option<u64>,
+    policy: RetryPolicy,
+) -> Result<()> {
+    let partial = partial_path(dest);
+    let partial_len = || partial.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut failures = 0u32;
+    loop {
+        let before = partial_len();
+        let err = match download_resumable(url, dest, expected_size) {
+            Ok(()) => return Ok(()),
+            Err(e) if is_transient(&e) => e,
+            Err(e) => return Err(e),
+        };
+        if partial_len() != before {
+            failures = 0;
+        }
+        failures += 1;
+        if failures > policy.max_retries {
+            return Err(err.context(format!(
+                "download failed after {} retries without progress — re-run to resume \
+                 (set {RETRIES_ENV} to retry longer)",
+                policy.max_retries
+            )));
+        }
+        let delay = policy.delay(failures);
+        println!(
+            "  {} {err:#}. Retrying in {}s ({failures}/{})...",
+            "⚠".yellow(),
+            delay.as_secs(),
+            policy.max_retries
+        );
+        std::thread::sleep(delay);
+    }
+}
+
 /// Resumable download: writes `<dest>.partial` + `<dest>.etag`, continues via HTTP Range, restarts
 /// cleanly if the server object changed or Range is unsupported, renames into place when complete.
 fn download_resumable(url: &str, dest: &Path, expected_size: Option<u64>) -> Result<()> {
-    let partial = dest.with_extension(format!(
-        "{}.partial",
-        dest.extension().unwrap_or_default().to_string_lossy()
-    ));
+    let partial = partial_path(dest);
     let etag_file = partial.with_extension("etag");
 
     let offset = partial.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // Re-resolve every run: presigned redirect targets expire.
+    // Re-resolve every attempt: presigned redirect targets expire.
     let final_url = resolve_redirects(url)?;
-    let mut req = ureq::get(&final_url);
+    let mut req = download_agent().get(&final_url);
     if offset > 0 {
         req = req.set("Range", &format!("bytes={offset}-"));
     }
@@ -739,16 +866,14 @@ fn download_resumable(url: &str, dest: &Path, expected_size: Option<u64>) -> Res
             .map(|l| l + offset)
     });
     stream_to_file(resp.into_reader(), &partial, offset, total)?;
-    finish_download(&partial, &etag_file, dest, expected_size)
+    finish_download(&partial, &etag_file, dest, total)
 }
 
 fn download_resumable_fresh(url: &str, dest: &Path, expected_size: Option<u64>) -> Result<()> {
-    let partial = dest.with_extension(format!(
-        "{}.partial",
-        dest.extension().unwrap_or_default().to_string_lossy()
-    ));
+    let partial = partial_path(dest);
     let etag_file = partial.with_extension("etag");
-    let resp = ureq::get(url)
+    let resp = download_agent()
+        .get(url)
         .call()
         .with_context(|| format!("request failed: {url}"))?;
     let etag = resp
@@ -760,7 +885,7 @@ fn download_resumable_fresh(url: &str, dest: &Path, expected_size: Option<u64>) 
     let total =
         expected_size.or_else(|| resp.header("Content-Length").and_then(|v| v.parse().ok()));
     stream_to_file(resp.into_reader(), &partial, 0, total)?;
-    finish_download(&partial, &etag_file, dest, expected_size)
+    finish_download(&partial, &etag_file, dest, total)
 }
 
 fn stream_to_file(
@@ -778,9 +903,16 @@ fn stream_to_file(
     let mut writer = BufWriter::new(file);
     let mut buf = [0u8; 1 << 16];
     loop {
-        let n = reader
-            .read(&mut buf)
-            .context("download interrupted — re-run to resume")?;
+        let n = match reader.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                // Keep what we already received so the retry resumes after it.
+                writer.flush()?;
+                bar.abandon();
+                return Err(Transient(format!("download interrupted: {e}")).into());
+            }
+        };
         if n == 0 {
             break;
         }
@@ -792,20 +924,23 @@ fn stream_to_file(
     Ok(())
 }
 
+/// `total` is the archive size when known (listing or Content-Length); a body that ended short of it
+/// is a dropped stream, not a finished download.
 fn finish_download(
     partial: &Path,
     etag_file: &Path,
     dest: &Path,
-    expected_size: Option<u64>,
+    total: Option<u64>,
 ) -> Result<()> {
-    if let Some(expected) = expected_size {
+    if let Some(expected) = total {
         let actual = partial.metadata()?.len();
         if actual < expected {
-            bail!(
-                "download incomplete ({} of {}) — re-run to resume",
+            return Err(Transient(format!(
+                "download incomplete ({} of {})",
                 format_bytes(actual),
                 format_bytes(expected)
-            );
+            ))
+            .into());
         }
     }
     fs::rename(partial, dest)?;
@@ -1287,5 +1422,190 @@ mod tests {
             parse_version_from_name("mainnet-stacks-blockchain-api-8.1.0.tar.gz", Kind::Api),
             Some(vec![8, 1, 0])
         );
+    }
+
+    // ---- download retries --------------------------------------------------------------------
+
+    use std::io::{BufRead, BufReader as IoBufReader};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    enum Behavior {
+        /// Serve Range requests; cut the first `n` multi-byte bodies off a third of the way in.
+        DropBodies(usize),
+        /// Answer every request with this status.
+        Status(u16),
+    }
+
+    /// Minimal HTTP/1.1 server with Range + ETag support, one request per connection. Returns the
+    /// base URL and a request counter.
+    fn serve(body: Vec<u8>, behavior: Behavior) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/archive.tar.zst", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        std::thread::spawn(move || {
+            let mut drops_left = match behavior {
+                Behavior::DropBodies(n) => n,
+                Behavior::Status(_) => 0,
+            };
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut range: Option<(usize, usize)> = None;
+                let mut reader = IoBufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (a, b) = v.split_once('-').unwrap();
+                        let start = a.parse().unwrap();
+                        let end = if b.is_empty() {
+                            body.len() - 1
+                        } else {
+                            b.parse().unwrap()
+                        };
+                        range = Some((start, end));
+                    }
+                }
+                if let Behavior::Status(code) = behavior {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {code} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    continue;
+                }
+                let (status, start, end) = match range {
+                    Some((a, b)) => ("206 Partial Content", a, b),
+                    None => ("200 OK", 0, body.len() - 1),
+                };
+                let slice = &body[start..=end];
+                let mut head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nETag: \"v1\"\r\nConnection: close\r\n",
+                    slice.len()
+                );
+                if range.is_some() {
+                    head += &format!("Content-Range: bytes {start}-{end}/{}\r\n", body.len());
+                }
+                head += "\r\n";
+                let _ = stream.write_all(head.as_bytes());
+                let cut = slice.len() > 1 && drops_left > 0;
+                if cut {
+                    drops_left -= 1;
+                    let _ = stream.write_all(&slice[..slice.len() / 3]);
+                } else {
+                    let _ = stream.write_all(slice);
+                }
+                let _ = stream.flush();
+                // Dropping the stream closes the connection, mid-body when `cut`.
+            }
+        });
+        (url, requests)
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stacksup-dl-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn fast_policy(max_retries: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_retries,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn dropped_streams_resume_automatically() {
+        let body: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let (url, _) = serve(body.clone(), Behavior::DropBodies(3));
+        let dir = test_dir("resume");
+        let dest = dir.join("archive.tar.zst");
+
+        // Fewer retries than drops: progress on every attempt keeps resetting the counter.
+        download_with_retries(&url, &dest, Some(body.len() as u64), fast_policy(1)).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), body);
+        assert!(!partial_path(&dest).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropped_body_is_the_transient_error_seen_in_the_field() {
+        let body = vec![1u8; 50_000];
+        let (url, _) = serve(body.clone(), Behavior::DropBodies(1));
+        let dir = test_dir("field");
+        let dest = dir.join("archive.tar.zst");
+
+        let err = download_resumable(&url, &dest, Some(body.len() as u64)).unwrap_err();
+
+        assert!(is_transient(&err));
+        assert!(
+            format!("{err:#}").contains("response body closed before all bytes were read"),
+            "{err:#}"
+        );
+        // The received third is kept for the resume.
+        assert_eq!(partial_path(&dest).metadata().unwrap().len(), 50_000 / 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn short_body_without_known_size_is_retried() {
+        let body: Vec<u8> = (0..100_000u32).map(|i| (i % 7) as u8).collect();
+        let (url, _) = serve(body.clone(), Behavior::DropBodies(1));
+        let dir = test_dir("nosize");
+        let dest = dir.join("archive.tar.zst");
+
+        download_with_retries(&url, &dest, None, fast_policy(2)).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), body);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_errors_give_up_after_retries_without_progress() {
+        let (url, requests) = serve(vec![0; 10], Behavior::Status(503));
+        let dir = test_dir("503");
+        let dest = dir.join("archive.tar.zst");
+
+        let err = download_with_retries(&url, &dest, Some(10), fast_policy(2)).unwrap_err();
+
+        assert!(format!("{err:#}").contains("after 2 retries without progress"));
+        // 3 attempts, each a redirect probe + the download request
+        assert_eq!(requests.load(Ordering::SeqCst), 6);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn not_found_is_not_retried() {
+        let (url, requests) = serve(vec![0; 10], Behavior::Status(404));
+        let dir = test_dir("404");
+        let dest = dir.join("archive.tar.zst");
+
+        let err = download_with_retries(&url, &dest, Some(10), fast_policy(5)).unwrap_err();
+
+        assert!(!is_transient(&err));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retry_backoff_doubles_up_to_the_cap() {
+        let p = RetryPolicy {
+            max_retries: 10,
+            base_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(60),
+        };
+        let secs: Vec<u64> = (1..=7).map(|n| p.delay(n).as_secs()).collect();
+        assert_eq!(secs, vec![2, 4, 8, 16, 32, 60, 60]);
+        assert_eq!(p.delay(200).as_secs(), 60);
     }
 }
