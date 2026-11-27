@@ -1,4 +1,4 @@
-# Release image. The static musl binaries are built by the release workflow and staged as
+# Release image. The static musl binaries are built by the CI/release workflows and staged as
 # dist/<arch>/stacksup before this builds. There are no RUN steps, so the multi-platform build
 # needs no emulation. docker:cli ships the docker CLI + compose plugin stacksup shells out to.
 #
